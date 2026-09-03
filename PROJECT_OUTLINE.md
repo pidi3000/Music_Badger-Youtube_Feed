@@ -23,6 +23,11 @@ architecture decisions for the rebuild before any code is written.
 | Manual channel management | Kept alongside auto-sync. You can still add/tag a channel by video link, channel ID, or handle, independent of your subscriptions (same parsing rules as v2, ported forward — see `README.md`). |
 | Subscription sync | In-process background scheduler (APScheduler) inside the FastAPI app, running on an interval. No separate worker process/Celery for now. |
 | Unsubscribe handling | See §5 — channel is **never auto-deleted**, only flagged and surfaced to the user. |
+| Sync interval | Fixed default (e.g. 30 min), overridable via env var at deploy time. No UI setting for it. |
+| YouTube API quota strategy | Adaptive: cache responses, fetch uploads incrementally (only new since last sync), back off on quota errors. |
+| Deployment topology | Single Docker container — FastAPI serves the built React static files itself. |
+| App auth token | Signed httpOnly session cookie set on login with the shared secret. |
+| Sync history | A `SyncLog` table ships in v1 (not deferred). |
 
 ## 3. High-level architecture
 
@@ -123,20 +128,12 @@ POST   /api/sync                    # trigger sync now
 GET    /api/sync/status             # last run, next run, in-progress
 ```
 
-## 7. Open implementation details (to resolve during build, non-blocking)
+## 7. Resolved — no open questions remain
 
-These don't need to be decided before coding starts, but are flagged so
-they're not forgotten:
-
-- Exact sync interval and whether it's user-configurable from the UI.
-- YouTube Data API quota strategy (subscriptions can be large; uploads need
-  per-channel `playlistItems`/`search` calls — batching/backoff approach).
-- Whether the SPA is built and served as static files by FastAPI in one
-  Docker image (closer to v2's single-container deployment) or split into
-  two containers behind a reverse proxy.
-- Session/token mechanism for the shared-secret login (simple signed cookie
-  vs bearer token stored client-side).
-- Whether `SyncLog` ships in v1 of the rebuild or is added later.
+All previously open implementation details have been decided (see the table
+in §2 for the sync interval, quota strategy, deployment topology, auth
+token mechanism, and sync logging). Nothing here is blocking implementation
+anymore; SyncLog is included in the data model (§4) as part of v1.
 
 ## 8. Out of scope for this rebuild (unless requested later)
 
