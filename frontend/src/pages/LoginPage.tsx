@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { login, ApiError } from '../api/auth';
 import '../styles/login.css';
 
@@ -8,6 +9,7 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -17,7 +19,12 @@ export default function LoginPage() {
     try {
       const result = await login(secret);
       if (result.ok) {
-        navigate('/feed');
+        // The auth status query is cached for 5 minutes (see main.tsx);
+        // without invalidating it here, ProtectedRoute keeps reading the
+        // stale pre-login "not authenticated" result and bounces back to
+        // the login form even though the cookie is now set.
+        await queryClient.invalidateQueries({ queryKey: ['auth', 'status'] });
+        navigate('/feed', { replace: true });
       }
     } catch (err: unknown) {
       if (err instanceof ApiError && err.status === 401) {
