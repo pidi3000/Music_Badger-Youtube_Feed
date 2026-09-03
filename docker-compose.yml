@@ -1,0 +1,37 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override the image's sqlite default to use the postgres service
+      # below. Comment this out (and remove `depends_on`) to use sqlite
+      # instead, backed by the `app-data` volume.
+      DATABASE_URL: postgresql+asyncpg://music_badger:music_badger@db:5432/music_badger
+    volumes:
+      - app-data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: music_badger
+      POSTGRES_PASSWORD: music_badger
+      POSTGRES_DB: music_badger
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U music_badger"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  app-data:
+  db-data:

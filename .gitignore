@@ -7,6 +7,11 @@ data_dev/
 data/*
 client_secret_youtube.json
 
+# Node / frontend
+node_modules/
+.vite/
+npm-debug.log*
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
