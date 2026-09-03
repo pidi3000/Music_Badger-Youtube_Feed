@@ -3,6 +3,8 @@ import { useSearchParams } from 'react-router-dom';
 import { useSettings, useUpdateSettings, useYouTubeAuthStart, useDeleteYouTubeAuth } from '../api/settings';
 import { useApiKeys, useCreateApiKey, useDeleteApiKey } from '../api/apiKeys';
 import { useSyncStatus, useStartSync, SyncStatus } from '../api/sync';
+import { useToast } from '../context/ToastContext';
+import { getErrorMessage } from '../utils/errors';
 import '../styles/settings.css';
 
 export default function SettingsPage() {
@@ -32,6 +34,8 @@ export default function SettingsPage() {
   const { data: syncStatus } = useSyncStatus();
   const startSyncMutation = useStartSync();
 
+  const { showError } = useToast();
+
   useEffect(() => {
     if (settings) {
       setFetchMethod(settings.upload_fetch_method);
@@ -57,7 +61,7 @@ export default function SettingsPage() {
         backfill_min_count: backfillMinCount,
       });
     } catch (err) {
-      console.error('Failed to save settings:', err);
+      showError(getErrorMessage(err, 'Failed to save settings'));
     }
   };
 
@@ -66,7 +70,7 @@ export default function SettingsPage() {
       const result = await youtubeAuthStartMutation.mutateAsync();
       window.location.href = result.authorization_url;
     } catch (err) {
-      console.error('Failed to start YouTube auth:', err);
+      showError(getErrorMessage(err, 'Failed to start YouTube connection'));
     }
   };
 
@@ -74,7 +78,7 @@ export default function SettingsPage() {
     try {
       await deleteYouTubeAuthMutation.mutateAsync();
     } catch (err) {
-      console.error('Failed to disconnect YouTube:', err);
+      showError(getErrorMessage(err, 'Failed to disconnect YouTube'));
     }
   };
 
@@ -89,7 +93,7 @@ export default function SettingsPage() {
       setKeyLabel('');
       setKeyValue('');
     } catch (err) {
-      console.error('Failed to add API key:', err);
+      showError(getErrorMessage(err, 'Failed to add API key'));
     }
   };
 
@@ -98,7 +102,7 @@ export default function SettingsPage() {
       try {
         await deleteApiKeyMutation.mutateAsync(id);
       } catch (err) {
-        console.error('Failed to delete API key:', err);
+        showError(getErrorMessage(err, 'Failed to delete API key'));
       }
     }
   };
@@ -107,7 +111,7 @@ export default function SettingsPage() {
     try {
       await startSyncMutation.mutateAsync();
     } catch (err) {
-      console.error('Failed to start sync:', err);
+      showError(getErrorMessage(err, 'Failed to start sync'));
     }
   };
 

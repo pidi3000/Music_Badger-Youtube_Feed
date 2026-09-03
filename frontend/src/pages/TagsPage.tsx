@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useTags, useCreateTag, useUpdateTag, useDeleteTag } from '../api/tags';
 import { randomTagColor } from '../utils/color';
+import { useToast } from '../context/ToastContext';
+import { getErrorMessage } from '../utils/errors';
 import '../styles/tags.css';
 
 export default function TagsPage() {
@@ -14,6 +16,7 @@ export default function TagsPage() {
   const createTagMutation = useCreateTag();
   const updateTagMutation = useUpdateTag();
   const deleteTagMutation = useDeleteTag();
+  const { showError } = useToast();
 
   const handleAddTag = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,7 +30,7 @@ export default function TagsPage() {
       setNewTagName('');
       setNewTagColor(randomTagColor());
     } catch (err) {
-      console.error('Failed to create tag:', err);
+      showError(getErrorMessage(err, 'Failed to create tag'));
     }
   };
 
@@ -48,7 +51,7 @@ export default function TagsPage() {
       });
       setEditingId(null);
     } catch (err) {
-      console.error('Failed to update tag:', err);
+      showError(getErrorMessage(err, 'Failed to update tag'));
     }
   };
 
@@ -57,7 +60,7 @@ export default function TagsPage() {
       try {
         await deleteTagMutation.mutateAsync(id);
       } catch (err) {
-        console.error('Failed to delete tag:', err);
+        showError(getErrorMessage(err, 'Failed to delete tag'));
       }
     }
   };

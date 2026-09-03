@@ -1,4 +1,6 @@
 import { useBackfillTasks, useRetryBackfillTask, BackfillTask } from '../api/backfill';
+import { useToast } from '../context/ToastContext';
+import { getErrorMessage } from '../utils/errors';
 import BackfillTaskRow from '../components/BackfillTaskRow';
 import '../styles/backfill.css';
 
@@ -18,12 +20,13 @@ export default function BackfillPage() {
   });
 
   const retryMutation = useRetryBackfillTask();
+  const { showError } = useToast();
 
   const handleRetry = async (id: number) => {
     try {
       await retryMutation.mutateAsync(id);
     } catch (err) {
-      console.error('Failed to retry backfill task:', err);
+      showError(getErrorMessage(err, 'Failed to retry backfill task'));
     }
   };
 

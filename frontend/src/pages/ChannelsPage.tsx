@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useChannels, useCreateChannel, useDeleteChannel, useUpdateChannel, useAckUnsubscribe, Channel } from '../api/channels';
 import { useTags } from '../api/tags';
+import { useToast } from '../context/ToastContext';
+import { getErrorMessage } from '../utils/errors';
 import ChannelRow from '../components/ChannelRow';
 import AddChannelModal from '../components/AddChannelModal';
 import '../styles/channels.css';
@@ -15,17 +17,17 @@ export default function ChannelsPage() {
   const deleteChannelMutation = useDeleteChannel();
   const updateChannelMutation = useUpdateChannel();
   const ackUnsubscribeMutation = useAckUnsubscribe();
+  const { showError } = useToast();
 
   const handleAddChannel = async (channelLink: string, tagIds: number[]) => {
-    try {
-      await createChannelMutation.mutateAsync({
-        channel_link: channelLink,
-        tag_ids: tagIds.length > 0 ? tagIds : undefined,
-      });
-      setShowAddModal(false);
-    } catch (err) {
-      console.error('Failed to add channel:', err);
-    }
+    // Deliberately not caught here — AddChannelModal displays this error
+    // inline itself (it's right next to the form the user just submitted),
+    // so it re-throws rather than swallowing it silently.
+    await createChannelMutation.mutateAsync({
+      channel_link: channelLink,
+      tag_ids: tagIds.length > 0 ? tagIds : undefined,
+    });
+    setShowAddModal(false);
   };
 
   const handleDeleteChannel = async (id: number) => {
@@ -33,7 +35,7 @@ export default function ChannelsPage() {
       try {
         await deleteChannelMutation.mutateAsync(id);
       } catch (err) {
-        console.error('Failed to delete channel:', err);
+        showError(getErrorMessage(err, 'Failed to delete channel'));
       }
     }
   };
@@ -48,7 +50,7 @@ export default function ChannelsPage() {
         },
       });
     } catch (err) {
-      console.error('Failed to update channel:', err);
+      showError(getErrorMessage(err, 'Failed to update channel'));
     }
   };
 
@@ -56,7 +58,7 @@ export default function ChannelsPage() {
     try {
       await ackUnsubscribeMutation.mutateAsync(id);
     } catch (err) {
-      console.error('Failed to acknowledge unsubscribe:', err);
+      showError(getErrorMessage(err, 'Failed to acknowledge unsubscribe'));
     }
   };
 
