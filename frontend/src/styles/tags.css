@@ -1,0 +1,116 @@
+.tags-page {
+  max-width: 800px;
+}
+
+.add-tag-form {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 30px;
+}
+
+.add-tag-form input[type='text'] {
+  flex: 1;
+  padding: 10px 12px;
+}
+
+.add-tag-form input[type='color'] {
+  width: 50px;
+  height: 40px;
+}
+
+.add-tag-form button {
+  padding: 10px 20px;
+}
+
+.tags-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tag-row {
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 15px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+}
+
+.tag-row.editing {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.tag-row.editing input {
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.tag-row.editing input[type='color'] {
+  width: 50px;
+  height: 40px;
+}
+
+.tag-row.editing {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.tag-row.editing > div {
+  display: flex;
+  gap: 10px;
+}
+
+.tag-row.editing input[type='text'],
+.tag-row.editing input[type='color'] {
+  flex: 1;
+}
+
+.tag-row.editing button {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.tag-row > div {
+  display: flex;
+  gap: 10px;
+}
+
+.tag-row > div:last-child {
+  display: flex;
+  gap: 8px;
+}
+
+.tag-row button {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.tag-row button:last-child {
+  background: var(--danger);
+}
+
+@media (max-width: 768px) {
+  .add-tag-form {
+    flex-wrap: wrap;
+  }
+
+  .add-tag-form input[type='text'] {
+    flex: 1 1 100%;
+  }
+
+  .tag-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .tag-row > div:last-child {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

@@ -1,0 +1,38 @@
+.channels-page {
+  max-width: 1200px;
+}
+
+.channels-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.channels-header h1 {
+  margin-bottom: 0;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+  padding: 10px 20px;
+}
+
+.channels-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+@media (max-width: 768px) {
+  .channels-header {
+    flex-direction: column;
+    gap: 15px;
+    align-items: flex-start;
+  }
+
+  .btn-primary {
+    width: 100%;
+  }
+}
