@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Channel } from '../api/channels';
 import { Tag } from '../api/tags';
 import TagChip from './TagChip';
@@ -8,7 +8,8 @@ import '../styles/channel-row.css';
 interface ChannelRowProps {
   channel: Channel;
   allTags: Tag[];
-  onDelete: (id: number) => void;
+  highlighted?: boolean;
+  onDelete: () => void;
   onUpdate: (id: number, tagIds: number[], fetchMethod: string | null) => void;
   onAckUnsubscribe: (id: number) => void;
 }
@@ -36,6 +37,7 @@ function formatChannelStats(channel: Channel): string {
 export default function ChannelRow({
   channel,
   allTags,
+  highlighted = false,
   onDelete,
   onUpdate,
   onAckUnsubscribe,
@@ -43,6 +45,13 @@ export default function ChannelRow({
   const [showEdit, setShowEdit] = useState(false);
   const [selectedTags, setSelectedTags] = useState<number[]>(channel.tags.map((t) => t.id));
   const [fetchMethod, setFetchMethod] = useState<string | null>(channel.upload_fetch_method);
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (highlighted) {
+      rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [highlighted]);
 
   const handleSave = () => {
     onUpdate(channel.id, selectedTags, fetchMethod);
@@ -56,7 +65,7 @@ export default function ChannelRow({
   };
 
   return (
-    <div className="channel-row">
+    <div ref={rowRef} className={`channel-row ${highlighted ? 'highlighted' : ''}`}>
       <div className="channel-main">
         <div className="channel-header">
           <ChannelAvatar src={channel.thumbnail_url} title={channel.title} className="channel-thumb" />
@@ -122,7 +131,7 @@ export default function ChannelRow({
         ) : (
           <>
             <button onClick={() => setShowEdit(true)}>Edit</button>
-            <button onClick={() => onDelete(channel.id)}>Delete</button>
+            <button onClick={onDelete}>Delete</button>
           </>
         )}
       </div>

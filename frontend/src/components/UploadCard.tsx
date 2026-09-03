@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { Upload } from '../api/feed';
 import ChannelAvatar from './ChannelAvatar';
 import '../styles/upload-card.css';
@@ -25,10 +26,14 @@ export default function UploadCard({ upload }: UploadCardProps) {
       </div>
       <div className="upload-info">
         <h3>{upload.title}</h3>
-        <div className="channel-info">
+        <Link
+          to={`/channels?highlight=${upload.channel.id}`}
+          className="channel-info"
+          onClick={(e) => e.stopPropagation()}
+        >
           <ChannelAvatar src={upload.channel.thumbnail_url} title={upload.channel.title} className="channel-thumb" />
           <span>{upload.channel.title}</span>
-        </div>
+        </Link>
         <div className="meta">
           <span className="date">{publishedDate}</span>
           {upload.fetched_via === 'rss' && <span className="badge">RSS</span>}

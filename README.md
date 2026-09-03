@@ -81,12 +81,14 @@ comments. The key ones:
 | `ENCRYPTION_KEY` | Fernet key encrypting stored API keys / YouTube tokens at rest. |
 | `SESSION_SECRET` | Signs the login session cookie. |
 | `DATABASE_URL` | SQLAlchemy async URL — `sqlite+aiosqlite:///...` or `postgresql+asyncpg://...`. |
-| `SYNC_INTERVAL_MINUTES` | How often the background sync runs (default 30). |
+| `SYNC_INTERVAL_MINUTES` / `BACKFILL_WORKER_INTERVAL_SECONDS` | Initial values only, seeding Settings on first boot (defaults 30 / 60) — editable afterward from the UI. |
 | `YOUTUBE_OAUTH_CLIENT_ID` / `_SECRET` / `_REDIRECT_URI` | Google OAuth client for subscription import. |
 
-Everything else (upload fetch method, backfill retention thresholds, API
-keys and their groups) is configured at runtime from the Settings page,
-not env vars.
+Everything else (upload fetch method, backfill retention thresholds, sync
+interval, backfill worker interval, API keys and their groups) is
+configured at runtime from the Settings page — changes to the two
+interval settings there take effect immediately, live-rescheduling the
+running background jobs without a restart.
 
 ## Development
 

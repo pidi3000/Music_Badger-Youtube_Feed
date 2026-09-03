@@ -6,7 +6,6 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Config, get_config
-from app.db import async_session_factory
 from app.security import verify_session_token
 
 if TYPE_CHECKING:
@@ -15,8 +14,12 @@ if TYPE_CHECKING:
     from app.scheduler import SchedulerState
 
 
-async def get_db() -> AsyncIterator[AsyncSession]:
-    async with async_session_factory() as session:
+async def get_db(request: Request) -> AsyncIterator[AsyncSession]:
+    # Reads app.state.db_session_factory (set in main.create_app(),
+    # defaulting to app.db.async_session_factory) rather than importing the
+    # global directly, so tests can substitute an isolated factory on a
+    # per-app-instance basis — see tests/conftest.py.
+    async with request.app.state.db_session_factory() as session:
         yield session
 
 

@@ -49,7 +49,11 @@ export async function getChannel(id: number): Promise<Channel> {
   return apiCall(`/api/channels/${id}`);
 }
 
-export async function createChannel(payload: { channel_link: string; tag_ids?: number[] }): Promise<Channel> {
+export async function createChannel(payload: {
+  channel_link: string;
+  tag_ids?: number[];
+  upload_fetch_method?: 'api' | 'rss';
+}): Promise<Channel> {
   return apiCall('/api/channels', {
     method: 'POST',
     body: JSON.stringify(payload),

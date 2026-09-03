@@ -86,6 +86,7 @@ async def create_manual_channel(
     settings: AppSettings,
     channel_link: str,
     tag_ids: list[int],
+    upload_fetch_method: str | None = None,
 ) -> Channel:
     info = await _resolve_channel_info(session, http_client, channel_link)
 
@@ -109,6 +110,7 @@ async def create_manual_channel(
         thumbnail_url=info.thumbnail_url,
         source="manual",
         subscription_status="subscribed",
+        upload_fetch_method=upload_fetch_method,
     )
     session.add(channel)
     await session.flush()

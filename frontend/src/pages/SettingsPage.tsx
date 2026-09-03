@@ -16,6 +16,8 @@ export default function SettingsPage() {
   const [fetchMethod, setFetchMethod] = useState<'api' | 'rss'>('api');
   const [backfillDays, setBackfillDays] = useState(0);
   const [backfillMinCount, setBackfillMinCount] = useState(0);
+  const [syncIntervalMinutes, setSyncIntervalMinutes] = useState(0);
+  const [backfillWorkerIntervalSeconds, setBackfillWorkerIntervalSeconds] = useState(0);
   const updateSettingsMutation = useUpdateSettings();
 
   // YouTube
@@ -41,6 +43,8 @@ export default function SettingsPage() {
       setFetchMethod(settings.upload_fetch_method);
       setBackfillDays(settings.backfill_days);
       setBackfillMinCount(settings.backfill_min_count);
+      setSyncIntervalMinutes(settings.sync_interval_minutes);
+      setBackfillWorkerIntervalSeconds(settings.backfill_worker_interval_seconds);
     }
   }, [settings]);
 
@@ -59,6 +63,8 @@ export default function SettingsPage() {
         upload_fetch_method: fetchMethod,
         backfill_days: backfillDays,
         backfill_min_count: backfillMinCount,
+        sync_interval_minutes: syncIntervalMinutes,
+        backfill_worker_interval_seconds: backfillWorkerIntervalSeconds,
       });
     } catch (err) {
       showError(getErrorMessage(err, 'Failed to save settings'));
@@ -153,7 +159,21 @@ export default function SettingsPage() {
             </div>
             <div>
               <label>Sync Interval (minutes)</label>
-              <p className="read-only">{settings?.sync_interval_minutes}</p>
+              <input
+                type="number"
+                min={1}
+                value={syncIntervalMinutes}
+                onChange={(e) => setSyncIntervalMinutes(Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label>Backfill Worker Interval (seconds)</label>
+              <input
+                type="number"
+                min={10}
+                value={backfillWorkerIntervalSeconds}
+                onChange={(e) => setBackfillWorkerIntervalSeconds(Number(e.target.value))}
+              />
             </div>
             <button type="submit">Save Settings</button>
           </form>

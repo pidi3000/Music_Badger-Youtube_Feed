@@ -12,7 +12,6 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.db import Base
-from app.deps import get_db
 from app.main import create_app
 
 
@@ -39,14 +38,12 @@ async def db_session(db_session_factory) -> AsyncIterator[AsyncSession]:
 @pytest_asyncio.fixture
 async def app(db_session_factory):
     application = create_app()
-
-    async def override_get_db() -> AsyncIterator[AsyncSession]:
-        async with db_session_factory() as session:
-            yield session
-
-    application.dependency_overrides[get_db] = override_get_db
+    # Substitutes the isolated per-test SQLite factory for the app's real
+    # default (app.db.async_session_factory) — both regular routes
+    # (via deps.get_db) and the startup lifespan read this same
+    # app.state attribute, so this one line covers both.
+    application.state.db_session_factory = db_session_factory
     yield application
-    application.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture

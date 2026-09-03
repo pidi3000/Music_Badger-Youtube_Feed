@@ -5,6 +5,10 @@
 
 .sidebar {
   width: 220px;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  overflow-y: auto;
   background: var(--bg-light);
   border-right: 1px solid var(--border);
   display: flex;
@@ -73,7 +77,13 @@
 .main-content {
   flex: 1;
   padding: 30px;
-  overflow-y: auto;
+  /* No overflow-y here deliberately: setting it (even to `auto`) makes
+     this element the nearest scrolling ancestor for any `position: sticky`
+     descendant (e.g. .tag-filter on the Feed page), regardless of whether
+     it's actually bounded/scrolling — which it isn't here (unbounded
+     height, grows with content). The page itself scrolls instead, which
+     is what .sidebar's sticky positioning already relies on; this keeps
+     both consistent with the same single scrolling context. */
 }
 
 @media (max-width: 768px) {
@@ -83,6 +93,7 @@
 
   .sidebar {
     width: 100%;
+    height: auto;
     flex-direction: row;
     padding: 15px;
     border-right: none;

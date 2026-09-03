@@ -69,6 +69,17 @@
   gap: 8px;
   font-size: 13px;
   color: var(--text-light);
+  text-decoration: none;
+  width: fit-content;
+}
+
+.channel-info:hover {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.channel-info:hover span {
+  text-decoration: underline;
 }
 
 .channel-info .channel-thumb {

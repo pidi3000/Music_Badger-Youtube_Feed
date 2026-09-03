@@ -41,6 +41,12 @@ class AppSettings(Base):
     backfill_days: Mapped[int] = mapped_column(Integer, default=365)
     backfill_min_count: Mapped[int] = mapped_column(Integer, default=50)
 
+    # Seeded from Config.sync_interval_minutes / .backfill_worker_interval_seconds
+    # on first boot, then editable from Settings — see app.scheduler for how a
+    # change here live-reschedules the running APScheduler jobs.
+    sync_interval_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    backfill_worker_interval_seconds: Mapped[int] = mapped_column(Integer, default=60)
+
     # Encrypted (app.encryption) YouTube OAuth refresh token, if connected.
     youtube_refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     youtube_channel_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

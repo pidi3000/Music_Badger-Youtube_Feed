@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
-from app.config import get_config
-from app.deps import DbSession, RequireAuth
+from app.deps import DbSession, RequireAuth, SchedulerDep
+from app.scheduler import reschedule_backfill_job, reschedule_sync_job
 from app.schemas import SettingsOut, SettingsUpdate
 from app.services.settings_service import get_or_create_settings
 
@@ -10,7 +10,8 @@ router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[RequireA
 
 def _to_out(settings) -> SettingsOut:
     return SettingsOut(
-        sync_interval_minutes=get_config().sync_interval_minutes,
+        sync_interval_minutes=settings.sync_interval_minutes,
+        backfill_worker_interval_seconds=settings.backfill_worker_interval_seconds,
         upload_fetch_method=settings.upload_fetch_method,
         backfill_days=settings.backfill_days,
         backfill_min_count=settings.backfill_min_count,
@@ -27,7 +28,7 @@ async def get_settings(session: DbSession):
 
 
 @router.patch("", response_model=SettingsOut)
-async def update_settings(body: SettingsUpdate, session: DbSession):
+async def update_settings(body: SettingsUpdate, session: DbSession, scheduler: SchedulerDep):
     settings = await get_or_create_settings(session)
 
     if body.upload_fetch_method is not None:
@@ -36,6 +37,19 @@ async def update_settings(body: SettingsUpdate, session: DbSession):
         settings.backfill_days = body.backfill_days
     if body.backfill_min_count is not None:
         settings.backfill_min_count = body.backfill_min_count
+
+    # These two also drive the live APScheduler jobs — a value change here
+    # reschedules the already-running job immediately rather than only
+    # taking effect on next restart.
+    if body.sync_interval_minutes is not None and body.sync_interval_minutes != settings.sync_interval_minutes:
+        settings.sync_interval_minutes = body.sync_interval_minutes
+        reschedule_sync_job(scheduler, body.sync_interval_minutes)
+    if (
+        body.backfill_worker_interval_seconds is not None
+        and body.backfill_worker_interval_seconds != settings.backfill_worker_interval_seconds
+    ):
+        settings.backfill_worker_interval_seconds = body.backfill_worker_interval_seconds
+        reschedule_backfill_job(scheduler, body.backfill_worker_interval_seconds)
 
     await session.commit()
     await session.refresh(settings)

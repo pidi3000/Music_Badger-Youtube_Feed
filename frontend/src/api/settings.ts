@@ -3,6 +3,7 @@ import { apiCall } from './client';
 
 export interface Settings {
   sync_interval_minutes: number;
+  backfill_worker_interval_seconds: number;
   upload_fetch_method: 'api' | 'rss';
   backfill_days: number;
   backfill_min_count: number;
@@ -16,6 +17,8 @@ export async function getSettings(): Promise<Settings> {
 
 export async function updateSettings(
   payload: Partial<{
+    sync_interval_minutes: number;
+    backfill_worker_interval_seconds: number;
     upload_fetch_method: 'api' | 'rss';
     backfill_days: number;
     backfill_min_count: number;

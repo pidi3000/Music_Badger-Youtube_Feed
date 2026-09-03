@@ -4,13 +4,14 @@ import '../styles/modal.css';
 
 interface AddChannelModalProps {
   onClose: () => void;
-  onSubmit: (channelLink: string, tagIds: number[]) => void;
+  onSubmit: (channelLink: string, tagIds: number[], fetchMethod: 'api' | 'rss' | null) => void;
   tags: Tag[];
 }
 
 export default function AddChannelModal({ onClose, onSubmit, tags }: AddChannelModalProps) {
   const [channelLink, setChannelLink] = useState('');
   const [selectedTags, setSelectedTags] = useState<number[]>([]);
+  const [fetchMethod, setFetchMethod] = useState<'api' | 'rss' | null>(null);
   const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -23,7 +24,7 @@ export default function AddChannelModal({ onClose, onSubmit, tags }: AddChannelM
     }
 
     try {
-      await onSubmit(channelLink, selectedTags);
+      await onSubmit(channelLink, selectedTags, fetchMethod);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add channel');
     }
@@ -62,6 +63,18 @@ export default function AddChannelModal({ onClose, onSubmit, tags }: AddChannelM
                 </label>
               ))}
             </div>
+          </div>
+
+          <div>
+            <label>Upload fetch method</label>
+            <select
+              value={fetchMethod ?? 'default'}
+              onChange={(e) => setFetchMethod(e.target.value === 'default' ? null : (e.target.value as 'api' | 'rss'))}
+            >
+              <option value="default">Use global default</option>
+              <option value="api">API</option>
+              <option value="rss">RSS</option>
+            </select>
           </div>
 
           {error && <p className="error">{error}</p>}

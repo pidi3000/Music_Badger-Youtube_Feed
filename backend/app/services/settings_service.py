@@ -16,7 +16,11 @@ async def get_or_create_settings(session: AsyncSession) -> AppSettings:
         return settings
 
     config = get_config()
-    settings = AppSettings(access_secret_hash=hash_secret(config.app_access_secret))
+    settings = AppSettings(
+        access_secret_hash=hash_secret(config.app_access_secret),
+        sync_interval_minutes=config.sync_interval_minutes,
+        backfill_worker_interval_seconds=config.backfill_worker_interval_seconds,
+    )
     session.add(settings)
     await session.flush()
     return settings

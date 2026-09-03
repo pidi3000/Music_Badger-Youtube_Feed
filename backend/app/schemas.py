@@ -32,6 +32,7 @@ class AuthStatus(BaseModel):
 # ------------------------------------------------------------ settings ----
 class SettingsOut(BaseModel):
     sync_interval_minutes: int
+    backfill_worker_interval_seconds: int
     upload_fetch_method: FetchMethod
     backfill_days: int
     backfill_min_count: int
@@ -40,6 +41,8 @@ class SettingsOut(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
+    sync_interval_minutes: int | None = Field(default=None, ge=1)
+    backfill_worker_interval_seconds: int | None = Field(default=None, ge=10)
     upload_fetch_method: FetchMethod | None = None
     backfill_days: int | None = Field(default=None, ge=1)
     backfill_min_count: int | None = Field(default=None, ge=1)
@@ -94,6 +97,7 @@ class ChannelOut(BaseModel):
 class ChannelCreate(BaseModel):
     channel_link: str
     tag_ids: list[int] = Field(default_factory=list)
+    upload_fetch_method: FetchMethod | None = None
 
 
 class ChannelUpdate(BaseModel):

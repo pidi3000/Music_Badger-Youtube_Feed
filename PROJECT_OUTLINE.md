@@ -23,7 +23,7 @@ architecture decisions for the rebuild before any code is written.
 | Manual channel management | Kept alongside auto-sync. You can still add/tag a channel by video link, channel ID, or handle, independent of your subscriptions (same parsing rules as v2, ported forward — see `README.md`). |
 | Subscription sync | In-process background scheduler (APScheduler) inside the FastAPI app, running on an interval. No separate worker process/Celery for now. |
 | Unsubscribe handling | See §5 — channel is **never auto-deleted**, only flagged and surfaced to the user. |
-| Sync interval | Fixed default (e.g. 30 min), overridable via env var at deploy time. No UI setting for it. |
+| Sync interval | **Superseded** — env var (`SYNC_INTERVAL_MINUTES`) seeds the initial value only; it and `BACKFILL_WORKER_INTERVAL_SECONDS` are both editable from Settings, live-rescheduling the running APScheduler jobs on change. Requested and built after this outline was written. |
 | YouTube API quota strategy | Adaptive: cache responses, fetch uploads incrementally (only new since last sync), back off on quota errors. |
 | Deployment topology | Single Docker container — FastAPI serves the built React static files itself. |
 | App auth token | Signed httpOnly session cookie set on login with the shared secret. |

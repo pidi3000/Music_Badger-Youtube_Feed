@@ -10,7 +10,6 @@ import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from app.config import get_config
 from app.db import async_session_factory
 from app.services.backfill_service import run_worker_tick
 from app.services.sync_service import create_and_run_sync
@@ -48,13 +47,14 @@ async def _backfill_tick() -> None:
         await run_worker_tick(session, client)
 
 
-def create_scheduler(state: SchedulerState) -> AsyncIOScheduler:
-    config = get_config()
+def create_scheduler(
+    state: SchedulerState, sync_interval_minutes: int, backfill_worker_interval_seconds: int
+) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
 
     scheduler.add_job(
         run_sync_guarded,
-        trigger=IntervalTrigger(minutes=config.sync_interval_minutes),
+        trigger=IntervalTrigger(minutes=sync_interval_minutes),
         args=[state],
         id=SYNC_JOB_ID,
         max_instances=1,
@@ -62,9 +62,17 @@ def create_scheduler(state: SchedulerState) -> AsyncIOScheduler:
     )
     scheduler.add_job(
         _backfill_tick,
-        trigger=IntervalTrigger(seconds=config.backfill_worker_interval_seconds),
+        trigger=IntervalTrigger(seconds=backfill_worker_interval_seconds),
         id=BACKFILL_JOB_ID,
         max_instances=1,
         coalesce=True,
     )
     return scheduler
+
+
+def reschedule_sync_job(scheduler: AsyncIOScheduler, minutes: int) -> None:
+    scheduler.reschedule_job(SYNC_JOB_ID, trigger=IntervalTrigger(minutes=minutes))
+
+
+def reschedule_backfill_job(scheduler: AsyncIOScheduler, seconds: int) -> None:
+    scheduler.reschedule_job(BACKFILL_JOB_ID, trigger=IntervalTrigger(seconds=seconds))

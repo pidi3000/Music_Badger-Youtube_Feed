@@ -84,6 +84,25 @@ async def test_add_channel_by_handle(authed_client, db_session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_add_channel_with_explicit_fetch_method(authed_client, db_session, monkeypatch):
+    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    await db_session.commit()
+
+    async def fake_resolve_by_handle(client, api_key, handle):
+        return youtube_client.ChannelInfo(id="UCrsschannel1", title="RSS Channel", thumbnail_url=None, handle=handle)
+
+    monkeypatch.setattr(youtube_client, "resolve_channel_by_handle", fake_resolve_by_handle)
+
+    response = await authed_client.post(
+        "/api/channels", json={"channel_link": "@rsschan", "tag_ids": [], "upload_fetch_method": "rss"}
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["upload_fetch_method"] == "rss"
+    assert body["effective_fetch_method"] == "rss"
+
+
+@pytest.mark.asyncio
 async def test_channel_fetch_method_override_can_be_cleared_with_explicit_null(authed_client, db_session):
     channel = Channel(youtube_channel_id="UCoverride1", title="Override Chan", source="manual")
     db_session.add(channel)
@@ -123,6 +142,53 @@ async def test_add_channel_with_unparseable_link_returns_400(authed_client, db_s
 async def test_add_channel_with_no_active_keys_available_is_an_error(authed_client):
     response = await authed_client.post("/api/channels", json={"channel_link": "@somehandle", "tag_ids": []})
     assert response.status_code >= 400
+
+
+@pytest.mark.asyncio
+async def test_deleting_channel_cascades_to_its_uploads(authed_client, db_session):
+    channel = Channel(youtube_channel_id="UCcascade1", title="Cascade Channel", source="manual")
+    other_channel = Channel(youtube_channel_id="UCcascade2", title="Other Channel", source="manual")
+    db_session.add_all([channel, other_channel])
+    await db_session.flush()
+
+    db_session.add_all(
+        [
+            Upload(
+                channel_id=channel.id,
+                youtube_video_id="v1",
+                title="Video 1",
+                published_at=datetime.utcnow(),
+                thumbnail_url=None,
+                fetched_via="api",
+            ),
+            Upload(
+                channel_id=channel.id,
+                youtube_video_id="v2",
+                title="Video 2",
+                published_at=datetime.utcnow(),
+                thumbnail_url=None,
+                fetched_via="api",
+            ),
+            Upload(
+                channel_id=other_channel.id,
+                youtube_video_id="v3",
+                title="Other channel's video",
+                published_at=datetime.utcnow(),
+                thumbnail_url=None,
+                fetched_via="api",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await authed_client.delete(f"/api/channels/{channel.id}")
+    assert response.status_code == 204
+
+    from sqlalchemy import select as sa_select
+
+    remaining = await db_session.execute(sa_select(Upload))
+    remaining_ids = {u.youtube_video_id for u in remaining.scalars()}
+    assert remaining_ids == {"v3"}, "deleting a channel must cascade-delete its uploads, and only its uploads"
 
 
 @pytest.mark.asyncio
@@ -229,6 +295,38 @@ async def test_settings_get_and_patch(authed_client):
     assert updated_body["upload_fetch_method"] == "rss"
     assert updated_body["backfill_min_count"] == 10
     assert updated_body["backfill_days"] == 365
+    assert updated_body["sync_interval_minutes"] == 30
+    assert updated_body["backfill_worker_interval_seconds"] == 60
+
+
+@pytest.mark.asyncio
+async def test_settings_interval_update_live_reschedules_the_scheduler_jobs(app, authed_client):
+    from datetime import timedelta
+
+    from app.scheduler import BACKFILL_JOB_ID, SYNC_JOB_ID
+
+    scheduler = app.state.scheduler
+    assert scheduler.get_job(SYNC_JOB_ID).trigger.interval == timedelta(minutes=30)
+    assert scheduler.get_job(BACKFILL_JOB_ID).trigger.interval == timedelta(seconds=60)
+
+    response = await authed_client.patch(
+        "/api/settings",
+        json={"sync_interval_minutes": 15, "backfill_worker_interval_seconds": 45},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sync_interval_minutes"] == 15
+    assert body["backfill_worker_interval_seconds"] == 45
+
+    # The running APScheduler jobs must reflect the new interval immediately
+    # — not just the DB row — since that's the whole point of this feature.
+    assert scheduler.get_job(SYNC_JOB_ID).trigger.interval == timedelta(minutes=15)
+    assert scheduler.get_job(BACKFILL_JOB_ID).trigger.interval == timedelta(seconds=45)
+
+    # Persisted, too — a subsequent GET reflects the change.
+    refetched = await authed_client.get("/api/settings")
+    assert refetched.json()["sync_interval_minutes"] == 15
+    assert refetched.json()["backfill_worker_interval_seconds"] == 45
 
 
 @pytest.mark.asyncio

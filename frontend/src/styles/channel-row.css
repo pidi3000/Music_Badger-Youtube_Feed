@@ -7,6 +7,20 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 20px;
+  scroll-margin-top: 20px;
+}
+
+.channel-row.highlighted {
+  animation: channel-highlight-fade 2.5s ease-out;
+}
+
+@keyframes channel-highlight-fade {
+  0% {
+    box-shadow: 0 0 0 3px var(--primary);
+  }
+  100% {
+    box-shadow: none;
+  }
 }
 
 .channel-main {

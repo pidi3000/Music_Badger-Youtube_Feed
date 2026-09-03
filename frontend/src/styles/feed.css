@@ -1,15 +1,16 @@
-.feed-page {
-  max-width: 1400px;
-}
-
 .feed-page h1 {
   margin-bottom: 30px;
 }
 
 .tag-filter {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  padding: 12px 0;
   display: flex;
   gap: 10px;
-  margin-bottom: 30px;
+  margin-bottom: 18px;
   flex-wrap: wrap;
 }
 
@@ -35,7 +36,7 @@
 
 .upload-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 20px;
   margin-bottom: 30px;
 }

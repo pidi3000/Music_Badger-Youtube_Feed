@@ -10,7 +10,9 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.router import api_router
 from app.config import get_config
+from app.db import async_session_factory
 from app.scheduler import SchedulerState, create_scheduler
+from app.services.settings_service import get_or_create_settings
 
 logging.basicConfig(level=logging.INFO)
 
@@ -19,7 +21,19 @@ logging.basicConfig(level=logging.INFO)
 async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient(timeout=30)
     app.state.scheduler_state = SchedulerState()
-    app.state.scheduler = create_scheduler(app.state.scheduler_state)
+
+    # app.state.db_session_factory is set in create_app() (defaulting to
+    # the real app.db.async_session_factory) so tests can substitute an
+    # isolated one before the lifespan runs — see tests/conftest.py.
+    async with app.state.db_session_factory() as session:
+        settings = await get_or_create_settings(session)
+        sync_interval_minutes = settings.sync_interval_minutes
+        backfill_worker_interval_seconds = settings.backfill_worker_interval_seconds
+        await session.commit()
+
+    app.state.scheduler = create_scheduler(
+        app.state.scheduler_state, sync_interval_minutes, backfill_worker_interval_seconds
+    )
     app.state.scheduler.start()
 
     yield
@@ -31,6 +45,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     config = get_config()
     app = FastAPI(title="Music Badger", version="3.0.0", lifespan=lifespan)
+    app.state.db_session_factory = async_session_factory
 
     app.add_middleware(
         CORSMiddleware,
