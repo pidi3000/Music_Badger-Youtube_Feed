@@ -94,12 +94,12 @@
 }
 
 .notification {
-  background: #d1fae5;
-  color: #047857;
+  background: var(--badge-success-bg);
+  color: var(--badge-success-text);
   padding: 12px 16px;
   border-radius: 6px;
   margin-bottom: 20px;
-  border: 1px solid #a7f3d0;
+  border: 1px solid var(--badge-success-border);
 }
 
 @media (max-width: 768px) {

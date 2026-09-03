@@ -40,16 +40,33 @@
 
 .unsubscribe-banner {
   padding: 12px;
-  background: #fef3c7;
+  background: var(--badge-warning-bg);
   border-radius: 6px;
   font-size: 13px;
-  color: #92400e;
+  color: var(--badge-warning-text);
   text-align: center;
   margin-top: auto;
 }
 
-.logout-btn {
+.sidebar-footer {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.theme-toggle-btn {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.theme-toggle-btn:hover {
+  background: var(--border);
+}
+
+.logout-btn {
   width: 100%;
 }
 
@@ -83,8 +100,13 @@
     font-size: 13px;
   }
 
-  .logout-btn {
+  .sidebar-footer {
     margin-top: 0;
+    flex-direction: row;
+  }
+
+  .theme-toggle-btn,
+  .logout-btn {
     width: auto;
   }
 

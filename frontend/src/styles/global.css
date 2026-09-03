@@ -5,6 +5,8 @@
 }
 
 :root {
+  color-scheme: light;
+
   --primary: #3b82f6;
   --primary-dark: #1e40af;
   --text: #1f2937;
@@ -15,6 +17,62 @@
   --danger: #ef4444;
   --success: #10b981;
   --warning: #f59e0b;
+
+  /* Status/info pill badges (unsubscribe notices, source tags, sync
+     notifications, RSS-fetched markers, backfill error/pause states) —
+     kept as separate tokens from --warning/--success/etc. because badges
+     use a pastel background + dark text pairing, not the solid-fill +
+     white-text pairing buttons use. */
+  --badge-info-bg: #e0e7ff;
+  --badge-info-text: #3730a3;
+  --badge-warning-bg: #fef3c7;
+  --badge-warning-text: #92400e;
+  --badge-warning-border: #fcd34d;
+  --badge-danger-bg: #fee2e2;
+  --badge-success-bg: #d1fae5;
+  --badge-success-text: #047857;
+  --badge-success-border: #a7f3d0;
+  --badge-neutral-bg: #dbeafe;
+  --badge-neutral-text: #0c4a6e;
+
+  --shadow-color: rgba(0, 0, 0, 0.1);
+  --shadow-color-strong: rgba(0, 0, 0, 0.15);
+  --overlay: rgba(0, 0, 0, 0.5);
+}
+
+/* Dark mode: applied via a `data-theme` attribute on <html>, set by
+   useTheme()/initTheme() from either a stored user choice or the OS
+   preference (see src/hooks/useTheme.ts) — not a bare
+   prefers-color-scheme media query, so a manual toggle can always win. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --primary: #3b82f6;
+  --primary-dark: #2563eb;
+  --text: #e5e7eb;
+  --text-light: #9ca3af;
+  --bg: #0f1420;
+  --bg-light: #1a2233;
+  --border: #2d3748;
+  --danger: #f87171;
+  --success: #34d399;
+  --warning: #fbbf24;
+
+  --badge-info-bg: #312e81;
+  --badge-info-text: #c7d2fe;
+  --badge-warning-bg: #451a03;
+  --badge-warning-text: #fcd34d;
+  --badge-warning-border: #92400e;
+  --badge-danger-bg: #450a0a;
+  --badge-success-bg: #064e3b;
+  --badge-success-text: #6ee7b7;
+  --badge-success-border: #047857;
+  --badge-neutral-bg: #1e3a5f;
+  --badge-neutral-text: #93c5fd;
+
+  --shadow-color: rgba(0, 0, 0, 0.4);
+  --shadow-color-strong: rgba(0, 0, 0, 0.5);
+  --overlay: rgba(0, 0, 0, 0.6);
 }
 
 html {
@@ -22,6 +80,7 @@ html {
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 body {

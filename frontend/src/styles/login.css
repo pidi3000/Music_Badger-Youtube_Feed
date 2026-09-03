@@ -10,7 +10,7 @@
   background: var(--bg-light);
   padding: 40px;
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 3px var(--shadow-color);
   width: 100%;
   max-width: 400px;
 }

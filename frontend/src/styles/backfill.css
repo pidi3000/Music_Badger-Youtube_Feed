@@ -6,12 +6,12 @@
   display: flex;
   gap: 15px;
   padding: 15px;
-  background: #e0e7ff;
+  background: var(--badge-info-bg);
   border-radius: 8px;
   margin-bottom: 25px;
   font-size: 14px;
   font-weight: 500;
-  color: #3730a3;
+  color: var(--badge-info-text);
 }
 
 .backfill-list {

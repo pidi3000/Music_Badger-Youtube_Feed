@@ -2,12 +2,14 @@ import { Link, Outlet, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSyncStatus, SyncStatus } from '../api/sync';
 import { logout } from '../api/auth';
+import { useTheme } from '../hooks/useTheme';
 import '../styles/layout.css';
 
 export default function Layout() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: syncStatus } = useSyncStatus();
+  const { theme, toggleTheme } = useTheme();
 
   const handleLogout = async () => {
     try {
@@ -43,7 +45,16 @@ export default function Layout() {
             {statusData.unacknowledged_unsubscribed_count} channel(s) unsubscribed
           </div>
         ) : null}
-        <button className="logout-btn" onClick={handleLogout}>Logout</button>
+        <div className="sidebar-footer">
+          <button
+            className="theme-toggle-btn"
+            onClick={toggleTheme}
+            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          >
+            {theme === 'dark' ? '☀️ Light mode' : '🌙 Dark mode'}
+          </button>
+          <button className="logout-btn" onClick={handleLogout}>Logout</button>
+        </div>
       </nav>
       <main className="main-content">
         <Outlet />

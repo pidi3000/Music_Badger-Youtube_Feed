@@ -2,7 +2,7 @@
   background: var(--bg-light);
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 3px var(--shadow-color);
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
   display: flex;
@@ -11,7 +11,7 @@
 
 .upload-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 6px var(--shadow-color-strong);
 }
 
 .upload-thumbnail {
@@ -92,8 +92,8 @@
 }
 
 .meta .badge {
-  background: #dbeafe;
-  color: #0c4a6e;
+  background: var(--badge-neutral-bg);
+  color: var(--badge-neutral-text);
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 11px;

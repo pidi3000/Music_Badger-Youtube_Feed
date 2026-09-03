@@ -43,8 +43,8 @@
 
 .source-badge {
   display: inline-block;
-  background: #e0e7ff;
-  color: #3730a3;
+  background: var(--badge-info-bg);
+  color: var(--badge-info-text);
   padding: 4px 8px;
   border-radius: 4px;
   font-size: 11px;
@@ -64,18 +64,18 @@
   justify-content: space-between;
   align-items: center;
   padding: 12px;
-  background: #fef3c7;
-  border: 1px solid #fcd34d;
+  background: var(--badge-warning-bg);
+  border: 1px solid var(--badge-warning-border);
   border-radius: 6px;
   font-size: 13px;
-  color: #92400e;
+  color: var(--badge-warning-text);
   gap: 10px;
 }
 
 .unsubscribe-warning button {
   padding: 4px 12px;
   font-size: 12px;
-  background: #f59e0b;
+  background: var(--warning);
   color: white;
 }
 

@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useTags, useCreateTag, useUpdateTag, useDeleteTag } from '../api/tags';
+import { randomTagColor } from '../utils/color';
 import '../styles/tags.css';
 
 export default function TagsPage() {
   const [newTagName, setNewTagName] = useState('');
-  const [newTagColor, setNewTagColor] = useState('#3b82f6');
+  const [newTagColor, setNewTagColor] = useState<string>(() => randomTagColor());
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
@@ -24,7 +25,7 @@ export default function TagsPage() {
         color: newTagColor,
       });
       setNewTagName('');
-      setNewTagColor('#3b82f6');
+      setNewTagColor(randomTagColor());
     } catch (err) {
       console.error('Failed to create tag:', err);
     }

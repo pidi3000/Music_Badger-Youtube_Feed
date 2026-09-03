@@ -50,7 +50,7 @@
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--primary), #1e3a8a);
+  background: linear-gradient(90deg, var(--primary), var(--primary-dark));
   transition: width 0.3s;
 }
 
@@ -64,14 +64,14 @@
   font-size: 13px;
   color: var(--warning);
   padding: 8px 12px;
-  background: #fef3c7;
+  background: var(--badge-warning-bg);
   border-radius: 4px;
   margin: 0;
 }
 
 .error-info {
   padding: 12px;
-  background: #fee2e2;
+  background: var(--badge-danger-bg);
   border-radius: 4px;
   display: flex;
   justify-content: space-between;
