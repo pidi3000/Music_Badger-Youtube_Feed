@@ -41,6 +41,11 @@ architecture decisions for the rebuild before any code is written.
 | RSS backfill | A channel first fetched (or switched) to `rss` gets a one-time `api` backfill to the retention threshold first (if a key is available), then continues on `rss` for ongoing syncs. |
 | Backfill execution | Queued, not synchronous — each channel's backfill is a resumable `BackfillTask` (see §7) processed in the background, so a quota outage pauses and resumes it rather than losing progress or blocking anything. |
 | Backfill progress UI | The SPA has a dedicated progress view showing every channel's backfill status (queued/in progress/paused/completed), a progress indicator, and why it's paused (e.g. "quota exhausted, resumes ~4h"). |
+| Old v2 code | Removed in this branch (`app.py`, `music_feed/`, `migrations/`, `requirements.txt`, `pyproject.toml`, `Dockerfile`) and replaced by the new `backend/` + `frontend/` layout — recoverable from git history / `main` if ever needed. |
+| Repo layout | Monorepo: `backend/` (FastAPI app, its own `pyproject.toml`, Alembic migrations, tests) and `frontend/` (Vite + React + TS app, its own `package.json`, tests). Root `Dockerfile` multi-stage builds the frontend then copies its output into the backend image; root `docker-compose.yml` for local dev (app + optional Postgres). |
+| Secret encryption | `ApiKey.key_value` and stored YouTube OAuth tokens are encrypted at rest using a symmetric key from an `ENCRYPTION_KEY` env var (required at startup, alongside the existing app-access secret). |
+| Build-time YouTube credentials | No real Google OAuth client / API keys are available during this build. The OAuth flow, Data API calls, and RSS parsing are built against mocked/stubbed responses with automated tests; a live end-to-end YouTube login/sync is deferred until real credentials are plugged in later via the Settings UI / env. |
+| Delivery | Commits are pushed to this branch incrementally at milestones; no pull request is opened as part of this build. |
 
 ## 3. High-level architecture
 
