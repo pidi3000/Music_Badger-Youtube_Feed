@@ -32,6 +32,10 @@ architecture decisions for the rebuild before any code is written.
 | Key rotation | Use one key until it's quota-exhausted, then move to the next active key in the pool. |
 | Upload fetch method | Two methods per channel: **API** (YouTube Data API, full history, richer metadata, uses quota) or **HTTP/RSS** (public `feeds/videos.xml` feed, no key/quota needed, ~15 most recent uploads only, less metadata). Global default + per-channel override. |
 | Quota-exhaustion fallback | If a channel is set to `API` but every key in the pool is exhausted, the sync temporarily falls back to `RSS` for that channel and logs/flags that a fallback occurred (surfaced via `SyncLog` / a UI indicator), rather than skipping the channel. |
+| Upload caching | All fetched uploads are cached in the DB so they never need to be re-fetched. See §7. |
+| Cache pruning | None — once an upload is cached it's kept forever. The 1yr/min-50 rule only governs how far back to *backfill* when a channel is first synced, not later deletion. |
+| Retention thresholds | Configurable in Settings (defaults: 1 year back, minimum 50 uploads). |
+| RSS backfill | A channel first fetched (or switched) to `rss` gets a one-time `api` backfill to the retention threshold first (if a key is available), then continues on `rss` for ongoing syncs. |
 
 ## 3. High-level architecture
 
@@ -58,7 +62,8 @@ built React static files itself.
 
 - **Settings** — single-row table (or key/value): shared access secret hash,
   YouTube OAuth tokens, sync interval, last sync timestamp, global default
-  `upload_fetch_method` (`api` | `rss`).
+  `upload_fetch_method` (`api` | `rss`), `backfill_days` (default 365),
+  `backfill_min_count` (default 50) — see §7.
 - **Channel**
   - `id`, `youtube_channel_id`, `title`, `handle`, `thumbnail_url`
   - `source`: `subscription` | `manual` | `both`
@@ -67,6 +72,8 @@ built React static files itself.
   - `unsubscribed_ack`: bool — whether the user has dismissed the notification
   - `upload_fetch_method`: nullable `api` | `rss` — per-channel override of
     the global default (see §6)
+  - `backfill_completed_at`: nullable timestamp — set once the initial
+    history backfill (see §7) has run for this channel
   - `added_at`, `updated_at`
 - **Tag** — `id`, `name`, `color`
 - **ChannelTag** — many-to-many join table
@@ -155,7 +162,45 @@ to quota" indicator) so it's visible rather than silent. Once a key becomes
 `active` again, subsequent syncs for that channel go back to `api`
 (assuming no per-channel override to `rss`).
 
-## 7. API surface (sketch, not final)
+## 7. Upload caching & backfill policy
+
+Every upload fetched (via API or RSS) is persisted to the `Upload` table
+permanently — the feed and channel pages always read from the DB, never
+re-fetch from YouTube just to display data. YouTube is only queried by the
+sync job to pick up *new* uploads and, once, to backfill history.
+
+**Backfill target** (applies once per channel, the first time it's synced,
+tracked by `Channel.backfill_completed_at`): fetch uploads until **both**
+of the following are satisfied, whichever requires going further back:
+- at least `backfill_min_count` uploads are cached (default: 50), **and**
+- all uploads published within the last `backfill_days` are cached
+  (default: 365 days).
+
+In other words: go back ~1 year, but if a channel has fewer than 50 uploads
+in that window, keep paging further back until 50 are cached (or the
+channel's entire history is exhausted, if it has fewer than 50 uploads
+ever). Both thresholds are editable in Settings (`backfill_days`,
+`backfill_min_count`).
+
+**Method used for backfill**:
+- `api`-configured channels: paginate `playlistItems`/`search` directly
+  until the target is met.
+- `rss`-configured channels: the RSS feed only returns ~15 items, so it
+  can't satisfy the backfill target on its own. A channel first synced (or
+  switched) to `rss` gets a **one-time API backfill** to the target
+  (consuming a key from the pool, if one is available) before switching to
+  `rss` for all subsequent syncs. If no key is available at that moment,
+  the channel starts with whatever RSS returns and the backfill is retried
+  on a later sync once a key is active again — `backfill_completed_at`
+  stays null until the full target is actually met.
+
+**Ongoing syncs** (after backfill) only fetch what's new since
+`last_synced_at` (via API) or whatever the RSS feed currently returns —
+already-cached uploads are never re-fetched. Nothing is ever pruned: once
+cached, an upload stays in the DB regardless of how old it gets or how
+much the retention thresholds change later.
+
+## 8. API surface (sketch, not final)
 
 ```
 POST   /api/auth/login              # shared secret -> app session/token
@@ -177,7 +222,7 @@ DELETE /api/tags/{id}
 
 GET    /api/feed                    # uploads, filterable by tag(s)
 
-GET    /api/settings                # incl. global upload_fetch_method
+GET    /api/settings                # incl. upload_fetch_method, backfill_days, backfill_min_count
 PATCH  /api/settings
 
 GET    /api/api-keys                # list keys + status (active/exhausted, reset ETA)
@@ -189,21 +234,22 @@ POST   /api/sync                    # trigger sync now
 GET    /api/sync/status             # last run, next run, in-progress
 ```
 
-## 8. Resolved — no open questions remain
+## 9. Resolved — no open questions remain
 
 All previously open implementation details have been decided (see the table
 in §2 for the sync interval, quota strategy, deployment topology, auth
-token mechanism, sync logging, API key pooling, and the API/RSS fetch
-method). Nothing here is blocking implementation anymore; SyncLog and
-ApiKey are included in the data model (§4) as part of v1.
+token mechanism, sync logging, API key pooling, the API/RSS fetch method,
+and the upload caching/backfill policy). Nothing here is blocking
+implementation anymore; SyncLog, ApiKey, and the backfill fields are
+included in the data model (§4) as part of v1.
 
-## 9. Out of scope for this rebuild (unless requested later)
+## 10. Out of scope for this rebuild (unless requested later)
 
 - Multi-user support.
 - Data migration from a v2 database — this is a fresh rebuild, not an
   in-place upgrade. (Can be revisited if needed.)
 
-## 10. Tech stack summary
+## 11. Tech stack summary
 
 - **Backend**: FastAPI, SQLAlchemy 2.0 (async), Alembic, APScheduler,
   Pydantic v2, `httpx` (RSS fetching + general HTTP) /
