@@ -141,30 +141,45 @@ async def run_sync(session: AsyncSession, http_client: httpx.AsyncClient, log: S
     `create_and_run_sync` for the common case of creating one too."""
 
     settings = await get_or_create_settings(session)
+    log.status = "error"  # overwritten below on a clean run; a safe default if something throws early
 
     try:
-        channels_added = 0
-        channels_unsubscribed = 0
-
         access_token = await _get_access_token(http_client, settings)
         if access_token:
-            channels_added, channels_unsubscribed = await _import_subscriptions(
+            log.channels_added, log.channels_marked_unsubscribed = await _import_subscriptions(
                 session, http_client, access_token, settings
             )
 
-        result = await session.execute(
-            select(Channel).where(Channel.backfill_completed_at.is_not(None))
-        )
-        rss_fallback_count = 0
+        # Every channel gets an incremental "what's new" sync each cycle,
+        # regardless of whether its initial backfill has finished — not
+        # gated on backfill_completed_at. Backfilling deep history and
+        # picking up recent uploads are independent concerns: gating the
+        # latter on the former meant a channel showed zero uploads for as
+        # long as its backfill hadn't completed, which for an RSS-configured
+        # channel with no "background"-group key (backfill always runs via
+        # the API, never RSS) meant forever. upsert_uploads is idempotent,
+        # so this and the backfill queue can safely both touch the same
+        # channel's uploads without duplicating anything.
+        #
+        # Each channel is synced in its own try/except: one channel's
+        # failure (a genuinely broken feed, an unexpected API error) must
+        # not abort every other channel still queued for this cycle, nor
+        # discard the channels_added/channels_marked_unsubscribed count
+        # already recorded above.
+        result = await session.execute(select(Channel))
+        errors: list[str] = []
         for channel in result.scalars():
-            fell_back = await _sync_channel_uploads(session, http_client, channel, settings)
+            try:
+                fell_back = await _sync_channel_uploads(session, http_client, channel, settings)
+            except Exception as exc:  # noqa: BLE001 - isolated per channel, recorded below
+                errors.append(f"{channel.title} ({channel.youtube_channel_id}): {exc}")
+                logger.exception("sync failed for channel %s", channel.youtube_channel_id)
+                continue
             if fell_back:
-                rss_fallback_count += 1
+                log.rss_fallback_channels += 1
 
-        log.status = "success"
-        log.channels_added = channels_added
-        log.channels_marked_unsubscribed = channels_unsubscribed
-        log.rss_fallback_channels = rss_fallback_count
+        log.status = "error" if errors else "success"
+        log.error = "; ".join(errors) or None
     except Exception as exc:  # noqa: BLE001 - recorded on the log for the UI/API
         log.status = "error"
         log.error = str(exc)

@@ -38,6 +38,11 @@ async def test_import_subscriptions_adds_new_and_marks_unsubscribed(db_session, 
 
     monkeypatch.setattr(youtube_client, "list_my_subscriptions", fake_list_my_subscriptions)
 
+    async def fake_fetch_uploads_feed(client, youtube_channel_id):
+        return []
+
+    monkeypatch.setattr(rss, "fetch_uploads_feed", fake_fetch_uploads_feed)
+
     log = SyncLog(status="running")
     db_session.add(log)
     await db_session.flush()
@@ -160,4 +165,89 @@ async def test_channel_upload_sync_falls_back_to_rss_on_quota_exhaustion(db_sess
     result = await db_session.execute(select(Upload).where(Upload.channel_id == chan.id))
     uploads = list(result.scalars())
     assert len(uploads) == 1
+
+
+@pytest.mark.asyncio
+async def test_channel_with_incomplete_backfill_still_gets_incremental_sync(db_session, monkeypatch):
+    """Regression test: a channel whose backfill can never complete (e.g.
+    only an "active"-group key configured, no "background" key — backfill
+    always runs via the API, never RSS) must still receive its incremental
+    "what's new" sync. Previously this was gated on
+    `backfill_completed_at IS NOT NULL`, so an RSS-configured channel
+    without a background key showed zero uploads forever."""
+
+    settings = await get_or_create_settings(db_session)
+    settings.upload_fetch_method = "rss"
+    await db_session.commit()
+
+    chan = Channel(
+        youtube_channel_id="UCneverbackfilled",
+        title="Never Backfilled",
+        source="manual",
+        subscription_status="subscribed",
+        backfill_completed_at=None,  # backfill never finished
+    )
+    db_session.add(chan)
+    await db_session.commit()
+
+    async def fake_fetch_uploads_feed(client, youtube_channel_id):
+        return [
+            rss.RssUploadEntry(
+                video_id="rssvid1", title="RSS video", published_at=datetime.utcnow(), thumbnail_url=None
+            )
+        ]
+
+    monkeypatch.setattr(rss, "fetch_uploads_feed", fake_fetch_uploads_feed)
+
+    log = SyncLog(status="running")
+    db_session.add(log)
+    await db_session.flush()
+    await sync_service.run_sync(db_session, http_client=None, log=log)
+
+    await db_session.refresh(log)
+    assert log.status == "success"
+
+    from app.models import Upload
+
+    result = await db_session.execute(select(Upload).where(Upload.channel_id == chan.id))
+    uploads = list(result.scalars())
+    assert len(uploads) == 1
     assert uploads[0].fetched_via == "rss"
+
+
+@pytest.mark.asyncio
+async def test_one_channel_sync_failure_does_not_block_others_or_lose_import_counts(db_session, monkeypatch):
+    settings = await get_or_create_settings(db_session)
+    settings.upload_fetch_method = "rss"
+    await db_session.commit()
+
+    broken_channel = Channel(youtube_channel_id="UCbroken", title="Broken", source="manual")
+    healthy_channel = Channel(youtube_channel_id="UChealthy", title="Healthy", source="manual")
+    db_session.add_all([broken_channel, healthy_channel])
+    await db_session.commit()
+
+    async def fake_fetch_uploads_feed(client, youtube_channel_id):
+        if youtube_channel_id == "UCbroken":
+            raise RuntimeError("feed is unreachable")
+        return [
+            rss.RssUploadEntry(
+                video_id="healthyvid1", title="ok", published_at=datetime.utcnow(), thumbnail_url=None
+            )
+        ]
+
+    monkeypatch.setattr(rss, "fetch_uploads_feed", fake_fetch_uploads_feed)
+
+    log = SyncLog(status="running")
+    db_session.add(log)
+    await db_session.flush()
+    await sync_service.run_sync(db_session, http_client=None, log=log)
+
+    await db_session.refresh(log)
+    assert log.status == "error"
+    assert log.error is not None and "UCbroken" in log.error
+
+    from app.models import Upload
+
+    result = await db_session.execute(select(Upload).where(Upload.channel_id == healthy_channel.id))
+    uploads = list(result.scalars())
+    assert len(uploads) == 1, "the healthy channel must still get synced despite the other one failing"
