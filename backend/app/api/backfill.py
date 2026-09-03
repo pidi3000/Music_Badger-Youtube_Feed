@@ -4,8 +4,9 @@ from sqlalchemy.orm import selectinload
 
 from app.deps import DbSession, HttpClient, RequireAuth
 from app.models import BackfillTask
-from app.schemas import BackfillTaskOut, ChannelRef
+from app.schemas import BackfillTaskOut
 from app.services.backfill_service import process_task
+from app.services.channel_service import channel_to_ref
 
 router = APIRouter(prefix="/backfill-tasks", tags=["backfill"], dependencies=[RequireAuth])
 
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/backfill-tasks", tags=["backfill"], dependencies=[Re
 def _to_out(task: BackfillTask) -> BackfillTaskOut:
     return BackfillTaskOut(
         id=task.id,
-        channel=ChannelRef(id=task.channel.id, title=task.channel.title, thumbnail_url=task.channel.thumbnail_url),
+        channel=channel_to_ref(task.channel),
         status=task.status,
         fetched_count=task.fetched_count,
         target_min_count=task.target_min_count,

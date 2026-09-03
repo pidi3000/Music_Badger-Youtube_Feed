@@ -5,7 +5,8 @@ and easy to mock in tests). Every call takes either an `api_key` or an
 like `subscriptions.list`) — never both.
 """
 
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 
 from datetime import datetime
 
@@ -38,6 +39,10 @@ class PlaylistItem:
     title: str
     published_at: datetime
     thumbnail_url: str | None
+    # "video" | "short" | "live" — filled in by list_uploads via a batched
+    # videos.list lookup; defaults to "video" if that lookup is skipped or
+    # doesn't cover this id (e.g. a deleted/private video).
+    video_type: str = "video"
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,7 @@ class SubscriptionEntry:
     channel_id: str
     title: str
     thumbnail_url: str | None
+    subscribed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +109,59 @@ def _thumbnail_url(snippet: dict) -> str | None:
         if size in thumbnails:
             return thumbnails[size]["url"]
     return None
+
+
+_ISO8601_DURATION_RE = re.compile(
+    r"^P(?:\d+D)?T?(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?$"
+)
+
+# YouTube's original Shorts length limit. Duration alone is a heuristic
+# (Shorts also require a vertical/square aspect ratio, which isn't cheap to
+# check), but it's the only signal available without extra quota cost.
+_SHORT_MAX_SECONDS = 60
+
+
+def _parse_duration_seconds(duration: str) -> int:
+    match = _ISO8601_DURATION_RE.match(duration)
+    if not match:
+        return 0
+    hours = int(match.group("hours") or 0)
+    minutes = int(match.group("minutes") or 0)
+    seconds = int(match.group("seconds") or 0)
+    return hours * 3600 + minutes * 60 + seconds
+
+
+async def _classify_video_types(
+    client: httpx.AsyncClient, api_key: str, video_ids: list[str]
+) -> dict[str, str]:
+    """Best-effort video/short/live classification via one batched
+    videos.list call — `id` accepts up to 50 comma-separated ids for a
+    single quota unit, regardless of how many parts are requested.
+    playlistItems (and RSS) alone don't expose duration or live status."""
+
+    if not video_ids:
+        return {}
+
+    data = await _get(
+        client,
+        "videos",
+        {"part": "snippet,contentDetails,liveStreamingDetails", "id": ",".join(video_ids)},
+        api_key=api_key,
+    )
+
+    types: dict[str, str] = {}
+    for item in data.get("items", []):
+        video_id = item.get("id")
+        if not video_id:
+            continue
+        snippet = item.get("snippet", {})
+        if snippet.get("liveBroadcastContent") in ("live", "upcoming") or "liveStreamingDetails" in item:
+            types[video_id] = "live"
+            continue
+        duration = item.get("contentDetails", {}).get("duration")
+        seconds = _parse_duration_seconds(duration) if duration else 0
+        types[video_id] = "short" if 0 < seconds <= _SHORT_MAX_SECONDS else "video"
+    return types
 
 
 async def get_channel(client: httpx.AsyncClient, api_key: str, channel_id: str) -> ChannelInfo | None:
@@ -177,6 +236,17 @@ async def list_uploads(
         )
         for item in data.get("items", [])
     ]
+
+    # Best-effort: a failure classifying types must not lose the uploads
+    # themselves. A genuine quota exhaustion (YoutubeQuotaExceeded) is left
+    # to propagate as usual so key rotation still reacts to it.
+    try:
+        types = await _classify_video_types(client, api_key, [item.video_id for item in items])
+    except YoutubeApiError:
+        types = {}
+    if types:
+        items = [replace(item, video_type=types.get(item.video_id, "video")) for item in items]
+
     return Page(items=items, next_page_token=data.get("nextPageToken"))
 
 
@@ -209,6 +279,9 @@ async def list_my_subscriptions(
             channel_id=item["snippet"]["resourceId"]["channelId"],
             title=item["snippet"]["title"],
             thumbnail_url=_thumbnail_url(item["snippet"]),
+            subscribed_at=(
+                _parse_iso(item["snippet"]["publishedAt"]) if item["snippet"].get("publishedAt") else None
+            ),
         )
         for item in data.get("items", [])
     ]

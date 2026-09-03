@@ -19,6 +19,9 @@ class RssUploadEntry:
     title: str
     published_at: datetime
     thumbnail_url: str | None
+    # The public feed doesn't expose duration or live status, so RSS-sourced
+    # uploads are always classified as plain "video" (best effort).
+    video_type: str = "video"
 
 
 def parse_uploads_feed(raw_xml: str | bytes) -> list[RssUploadEntry]:

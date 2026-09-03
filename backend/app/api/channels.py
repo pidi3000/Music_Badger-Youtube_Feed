@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -8,12 +10,14 @@ from app.schemas import ChannelCreate, ChannelOut, ChannelUpdate
 from app.services import key_pool
 from app.services.channel_service import (
     ChannelResolveError,
+    ChannelSortField,
     UploadStats,
     channel_to_out,
     create_manual_channel,
     get_upload_stats,
     load_channel,
     set_channel_tags,
+    sort_channels,
 )
 from app.services.settings_service import get_or_create_settings
 
@@ -31,13 +35,23 @@ def _channel_query():
 async def list_channels(
     session: DbSession,
     tag_id: int | None = None,
+    untagged: bool = False,
+    source: Literal["manual", "subscription"] | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     fetch_method: str | None = None,
+    sort: ChannelSortField = "name",
+    order: Literal["asc", "desc"] = "asc",
 ):
     settings = await get_or_create_settings(session)
-    query = _channel_query().order_by(Channel.title)
+    query = _channel_query()
     if tag_id is not None:
         query = query.join(Channel.channel_tags).where(ChannelTag.tag_id == tag_id)
+    if untagged:
+        query = query.where(~Channel.channel_tags.any())
+    if source == "manual":
+        query = query.where(Channel.source.in_(["manual", "both"]))
+    elif source == "subscription":
+        query = query.where(Channel.source.in_(["subscription", "both"]))
     if status_filter is not None:
         query = query.where(Channel.subscription_status == status_filter)
     if fetch_method is not None:
@@ -46,6 +60,7 @@ async def list_channels(
     result = await session.execute(query)
     channels = list(result.unique().scalars())
     stats_by_channel = await get_upload_stats(session, [c.id for c in channels])
+    channels = sort_channels(channels, stats_by_channel, sort, order)
     await session.commit()
     return [channel_to_out(c, settings, stats_by_channel.get(c.id, UploadStats())) for c in channels]
 

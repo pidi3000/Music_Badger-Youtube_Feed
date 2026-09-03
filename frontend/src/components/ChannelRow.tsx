@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Channel } from '../api/channels';
 import { Tag } from '../api/tags';
+import { youtubeChannelUrl } from '../utils/youtube';
 import TagChip from './TagChip';
 import ChannelAvatar from './ChannelAvatar';
 import '../styles/channel-row.css';
@@ -8,7 +9,6 @@ import '../styles/channel-row.css';
 interface ChannelRowProps {
   channel: Channel;
   allTags: Tag[];
-  highlighted?: boolean;
   onDelete: () => void;
   onUpdate: (id: number, tagIds: number[], fetchMethod: string | null) => void;
   onAckUnsubscribe: (id: number) => void;
@@ -31,27 +31,16 @@ function formatChannelStats(channel: Channel): string {
   parts.push(
     channel.last_synced_at ? `updated ${new Date(channel.last_synced_at).toLocaleString()}` : 'never updated',
   );
+  if (channel.subscribed_at) {
+    parts.push(`subscribed ${new Date(channel.subscribed_at).toLocaleDateString()}`);
+  }
   return parts.join(' · ');
 }
 
-export default function ChannelRow({
-  channel,
-  allTags,
-  highlighted = false,
-  onDelete,
-  onUpdate,
-  onAckUnsubscribe,
-}: ChannelRowProps) {
+export default function ChannelRow({ channel, allTags, onDelete, onUpdate, onAckUnsubscribe }: ChannelRowProps) {
   const [showEdit, setShowEdit] = useState(false);
   const [selectedTags, setSelectedTags] = useState<number[]>(channel.tags.map((t) => t.id));
   const [fetchMethod, setFetchMethod] = useState<string | null>(channel.upload_fetch_method);
-  const rowRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (highlighted) {
-      rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, [highlighted]);
 
   const handleSave = () => {
     onUpdate(channel.id, selectedTags, fetchMethod);
@@ -65,12 +54,16 @@ export default function ChannelRow({
   };
 
   return (
-    <div ref={rowRef} className={`channel-row ${highlighted ? 'highlighted' : ''}`}>
+    <div className="channel-row">
       <div className="channel-main">
         <div className="channel-header">
           <ChannelAvatar src={channel.thumbnail_url} title={channel.title} className="channel-thumb" />
           <div>
-            <h3>{channel.title}</h3>
+            <h3>
+              <a href={youtubeChannelUrl(channel)} target="_blank" rel="noopener noreferrer">
+                {channel.title}
+              </a>
+            </h3>
             {channel.handle && <p className="handle">@{channel.handle}</p>}
           </div>
           <span className="source-badge">{channel.source}</span>

@@ -5,6 +5,8 @@ real API (blocked by policy), so this is the closest available check that
 the extraction logic itself is correct.
 """
 
+from datetime import datetime
+
 import httpx
 import pytest
 
@@ -95,6 +97,7 @@ SUBSCRIPTIONS_RESPONSE = {
             "snippet": {
                 "title": "Some Channel",
                 "resourceId": {"kind": "youtube#channel", "channelId": "UCsomeid12345678901234"},
+                "publishedAt": "2023-05-10T08:00:00Z",
                 "thumbnails": {
                     "default": {"url": "https://yt3.ggpht.com/sub-default.jpg"},
                     "medium": {"url": "https://yt3.ggpht.com/sub-medium.jpg"},
@@ -109,6 +112,20 @@ SUBSCRIPTIONS_RESPONSE = {
 def _mock_client(response_json: dict) -> httpx.AsyncClient:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=response_json, request=request)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def _mock_multi_client(by_path_substring: dict[str, dict]) -> httpx.AsyncClient:
+    """Routes to a different canned response depending on which YouTube API
+    endpoint the request hit — needed for list_uploads, which now makes a
+    second (videos.list) call to classify each upload's type."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        for substring, response_json in by_path_substring.items():
+            if substring in str(request.url):
+                return httpx.Response(200, json=response_json, request=request)
+        return httpx.Response(200, json={"items": []}, request=request)
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
@@ -205,3 +222,137 @@ async def test_get_channel_returns_none_thumbnail_when_thumbnails_key_missing_en
 
     assert info is not None
     assert info.thumbnail_url is None
+
+
+@pytest.mark.asyncio
+async def test_list_my_subscriptions_extracts_subscribed_at():
+    async with _mock_client(SUBSCRIPTIONS_RESPONSE) as client:
+        page = await youtube_client.list_my_subscriptions(client, "fake-access-token")
+
+    assert page.items[0].subscribed_at == datetime(2023, 5, 10, 8, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "duration, expected_seconds",
+    [
+        ("PT45S", 45),
+        ("PT10M5S", 605),
+        ("PT1H2M3S", 3723),
+        ("PT0S", 0),
+        ("garbage", 0),
+    ],
+)
+def test_parse_duration_seconds(duration, expected_seconds):
+    assert youtube_client._parse_duration_seconds(duration) == expected_seconds
+
+
+@pytest.mark.asyncio
+async def test_classify_video_types_short_via_duration():
+    response = {
+        "items": [
+            {
+                "id": "vid-short",
+                "snippet": {"liveBroadcastContent": "none"},
+                "contentDetails": {"duration": "PT45S"},
+            }
+        ]
+    }
+    async with _mock_client(response) as client:
+        types = await youtube_client._classify_video_types(client, "fake-key", ["vid-short"])
+
+    assert types == {"vid-short": "short"}
+
+
+@pytest.mark.asyncio
+async def test_classify_video_types_live_via_broadcast_content():
+    response = {
+        "items": [
+            {
+                "id": "vid-live",
+                "snippet": {"liveBroadcastContent": "live"},
+                "contentDetails": {"duration": "PT0S"},
+            }
+        ]
+    }
+    async with _mock_client(response) as client:
+        types = await youtube_client._classify_video_types(client, "fake-key", ["vid-live"])
+
+    assert types == {"vid-live": "live"}
+
+
+@pytest.mark.asyncio
+async def test_classify_video_types_live_via_ended_livestream_details():
+    """An ended livestream reports liveBroadcastContent="none" again, but
+    still carries liveStreamingDetails — must still classify as live."""
+    response = {
+        "items": [
+            {
+                "id": "vid-ended-live",
+                "snippet": {"liveBroadcastContent": "none"},
+                "contentDetails": {"duration": "PT1H30M"},
+                "liveStreamingDetails": {"actualStartTime": "2024-01-01T00:00:00Z"},
+            }
+        ]
+    }
+    async with _mock_client(response) as client:
+        types = await youtube_client._classify_video_types(client, "fake-key", ["vid-ended-live"])
+
+    assert types == {"vid-ended-live": "live"}
+
+
+@pytest.mark.asyncio
+async def test_classify_video_types_normal_length_is_video():
+    response = {
+        "items": [
+            {
+                "id": "vid-normal",
+                "snippet": {"liveBroadcastContent": "none"},
+                "contentDetails": {"duration": "PT10M5S"},
+            }
+        ]
+    }
+    async with _mock_client(response) as client:
+        types = await youtube_client._classify_video_types(client, "fake-key", ["vid-normal"])
+
+    assert types == {"vid-normal": "video"}
+
+
+@pytest.mark.asyncio
+async def test_classify_video_types_returns_empty_for_no_ids():
+    async with _mock_client({"items": []}) as client:
+        types = await youtube_client._classify_video_types(client, "fake-key", [])
+
+    assert types == {}
+
+
+@pytest.mark.asyncio
+async def test_list_uploads_fills_in_video_type_from_classification():
+    async with _mock_multi_client(
+        {
+            "playlistItems": PLAYLIST_ITEMS_RESPONSE,
+            "videos": {
+                "items": [
+                    {
+                        "id": "abc123",
+                        "snippet": {"liveBroadcastContent": "none"},
+                        "contentDetails": {"duration": "PT45S"},
+                    }
+                ]
+            },
+        }
+    ) as client:
+        page = await youtube_client.list_uploads(client, "fake-key", "UU_x5XG1OV2P6uZZ5FSM9Ttw")
+
+    assert page.items[0].video_type == "short"
+
+
+@pytest.mark.asyncio
+async def test_list_uploads_defaults_video_type_when_classification_lookup_omits_the_id():
+    """A video id missing from the videos.list response (e.g. deleted)
+    must not crash the upload fetch — it just defaults to "video"."""
+    async with _mock_multi_client(
+        {"playlistItems": PLAYLIST_ITEMS_RESPONSE, "videos": {"items": []}}
+    ) as client:
+        page = await youtube_client.list_uploads(client, "fake-key", "UU_x5XG1OV2P6uZZ5FSM9Ttw")
+
+    assert page.items[0].video_type == "video"

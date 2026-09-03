@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.encryption import decrypt
 from app.models import AppSettings, Channel, SyncLog
-from app.services import key_pool, oauth, rss, youtube_client
+from app.services import avatar_store, key_pool, oauth, rss, youtube_client
 from app.services.backfill_service import enqueue_backfill_task
 from app.services.settings_service import get_or_create_settings
 from app.services.upload_store import upsert_uploads
@@ -53,12 +53,14 @@ async def _import_subscriptions(
     for channel_id, entry in remote_channels.items():
         local = local_channels.get(channel_id)
         if local is None:
+            avatar_url = await avatar_store.store_channel_avatar(http_client, channel_id, entry.thumbnail_url)
             new_channel = Channel(
                 youtube_channel_id=channel_id,
                 title=entry.title,
-                thumbnail_url=entry.thumbnail_url,
+                thumbnail_url=avatar_url or entry.thumbnail_url,
                 source="subscription",
                 subscription_status="subscribed",
+                subscribed_at=entry.subscribed_at,
             )
             session.add(new_channel)
             await session.flush()

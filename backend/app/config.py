@@ -45,6 +45,10 @@ class Config(BaseSettings):
     # Where the built frontend's static files live (mounted by main.py).
     static_dir: str = "./static"
 
+    # Where downloaded channel avatar images are cached on disk, served at
+    # /media (see app.services.avatar_store, app.main).
+    media_dir: str = "./data/media"
+
     cors_allow_origins: list[str] = ["http://localhost:5173"]
 
 

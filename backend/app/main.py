@@ -57,6 +57,10 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router)
 
+    media_dir = Path(config.media_dir)
+    media_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/media", StaticFiles(directory=str(media_dir)), name="media")
+
     static_dir = Path(config.static_dir)
     if static_dir.is_dir():
         assets_dir = static_dir / "assets"

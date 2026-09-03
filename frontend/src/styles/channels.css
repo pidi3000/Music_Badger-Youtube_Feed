@@ -25,6 +25,38 @@
   padding: 10px 20px;
 }
 
+.channels-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.channels-filter-bar select {
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.sort-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sort-order-btn {
+  padding: 8px 12px;
+  font-size: 14px;
+  line-height: 1;
+  background: var(--bg-light);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.sort-order-btn:hover {
+  background: var(--border);
+}
+
 .channels-grid {
   display: flex;
   flex-direction: column;
@@ -40,5 +72,10 @@
 
   .btn-primary {
     width: 100%;
+  }
+
+  .channels-filter-bar {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

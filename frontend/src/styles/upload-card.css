@@ -31,6 +31,27 @@
   object-fit: cover;
 }
 
+.video-type-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: white;
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.video-type-badge.video-type-short {
+  background: #7c3aed;
+}
+
+.video-type-badge.video-type-live {
+  background: #dc2626;
+}
+
 .upload-thumbnail .placeholder {
   position: absolute;
   top: 0;

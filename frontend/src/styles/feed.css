@@ -1,5 +1,46 @@
-.feed-page h1 {
+.feed-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
   margin-bottom: 30px;
+}
+
+.feed-header h1 {
+  margin-bottom: 0;
+}
+
+.total-uploads {
+  color: var(--text-light);
+  font-size: 14px;
+  margin: 0;
+}
+
+.video-type-filter {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.video-type-filter .type-chip {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-light);
+  color: var(--text);
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 13px;
+}
+
+.video-type-filter .type-chip.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.video-type-filter .type-chip:hover {
+  opacity: 0.85;
 }
 
 .tag-filter {

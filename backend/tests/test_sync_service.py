@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.encryption import encrypt
 from app.models import AppSettings, Channel, SyncLog
-from app.services import key_pool, oauth, rss, sync_service, youtube_client
+from app.services import avatar_store, key_pool, oauth, rss, sync_service, youtube_client
 from app.services.settings_service import get_or_create_settings
 
 
@@ -64,6 +64,55 @@ async def test_import_subscriptions_adds_new_and_marks_unsubscribed(db_session, 
     assert by_id["UCccc"].unsubscribed_at is not None
     assert "UCddd" in by_id
     assert by_id["UCddd"].source == "subscription"
+
+
+@pytest.mark.asyncio
+async def test_import_subscriptions_sets_subscribed_at_and_stores_avatar(db_session, monkeypatch):
+    settings = await get_or_create_settings(db_session)
+    settings.youtube_refresh_token_encrypted = encrypt("fake-refresh-token")
+    await db_session.commit()
+
+    monkeypatch.setattr(oauth, "refresh_access_token", fake_refresh_access_token)
+
+    subscribed_at = datetime(2023, 5, 10, 8, 0, 0)
+
+    async def fake_list_my_subscriptions(client, access_token, page_token=None):
+        return youtube_client.Page(
+            items=[
+                youtube_client.SubscriptionEntry(
+                    channel_id="UCnew1",
+                    title="New Channel",
+                    thumbnail_url="https://example.com/thumb.jpg",
+                    subscribed_at=subscribed_at,
+                ),
+            ],
+            next_page_token=None,
+        )
+
+    monkeypatch.setattr(youtube_client, "list_my_subscriptions", fake_list_my_subscriptions)
+
+    async def fake_store_channel_avatar(client, youtube_channel_id, remote_url):
+        assert youtube_channel_id == "UCnew1"
+        assert remote_url == "https://example.com/thumb.jpg"
+        return "/media/avatars/UCnew1.jpg"
+
+    monkeypatch.setattr(avatar_store, "store_channel_avatar", fake_store_channel_avatar)
+
+    async def fake_fetch_uploads_feed(client, youtube_channel_id):
+        return []
+
+    monkeypatch.setattr(rss, "fetch_uploads_feed", fake_fetch_uploads_feed)
+
+    log = SyncLog(status="running")
+    db_session.add(log)
+    await db_session.flush()
+
+    await sync_service.run_sync(db_session, http_client=None, log=log)
+
+    result = await db_session.execute(select(Channel).where(Channel.youtube_channel_id == "UCnew1"))
+    channel = result.scalar_one()
+    assert channel.subscribed_at == subscribed_at
+    assert channel.thumbnail_url == "/media/avatars/UCnew1.jpg"
 
 
 @pytest.mark.asyncio

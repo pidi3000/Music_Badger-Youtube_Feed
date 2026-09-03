@@ -23,23 +23,35 @@ export interface Channel {
   backfill_status: 'not_started' | 'queued' | 'in_progress' | 'paused_quota' | 'completed' | 'failed';
   upload_count: number;
   oldest_upload_at: string | null;
+  latest_upload_at: string | null;
   last_synced_at: string | null;
   tags: Tag[];
+  subscribed_at: string | null;
   added_at: string;
   updated_at: string;
 }
 
+export type ChannelSort = 'name' | 'subscribed_at' | 'latest_upload' | 'upload_count';
+
 export interface GetChannelsQuery {
   tag_id?: number;
+  untagged?: boolean;
+  source?: 'manual' | 'subscription';
   status?: 'subscribed' | 'unsubscribed';
   fetch_method?: 'api' | 'rss';
+  sort?: ChannelSort;
+  order?: 'asc' | 'desc';
 }
 
 export async function getChannels(query?: GetChannelsQuery): Promise<Channel[]> {
   const params = new URLSearchParams();
   if (query?.tag_id) params.append('tag_id', String(query.tag_id));
+  if (query?.untagged) params.append('untagged', 'true');
+  if (query?.source) params.append('source', query.source);
   if (query?.status) params.append('status', query.status);
   if (query?.fetch_method) params.append('fetch_method', query.fetch_method);
+  if (query?.sort) params.append('sort', query.sort);
+  if (query?.order) params.append('order', query.order);
 
   const url = `/api/channels${params.size > 0 ? '?' + params.toString() : ''}`;
   return apiCall<Channel[]>(url);

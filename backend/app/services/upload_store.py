@@ -18,6 +18,7 @@ class UploadEntryLike(Protocol):
     title: str
     thumbnail_url: str | None
     published_at: object  # datetime, kept loose to avoid importing datetime just for typing
+    video_type: str
 
 
 async def upsert_uploads(
@@ -53,6 +54,7 @@ async def upsert_uploads(
                 published_at=entry.published_at,
                 thumbnail_url=entry.thumbnail_url,
                 fetched_via=fetched_via,
+                video_type=getattr(entry, "video_type", "video"),
             )
         )
         existing_ids.add(entry.video_id)

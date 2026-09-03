@@ -1,6 +1,13 @@
 import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { useChannels, useCreateChannel, useDeleteChannel, useUpdateChannel, useAckUnsubscribe, Channel } from '../api/channels';
+import {
+  useChannels,
+  useCreateChannel,
+  useDeleteChannel,
+  useUpdateChannel,
+  useAckUnsubscribe,
+  Channel,
+  ChannelSort,
+} from '../api/channels';
 import { useTags } from '../api/tags';
 import { useToast } from '../context/ToastContext';
 import { getErrorMessage } from '../utils/errors';
@@ -8,12 +15,29 @@ import ChannelRow from '../components/ChannelRow';
 import AddChannelModal from '../components/AddChannelModal';
 import '../styles/channels.css';
 
+const SORT_OPTIONS: { value: ChannelSort; label: string }[] = [
+  { value: 'name', label: 'Name' },
+  { value: 'subscribed_at', label: 'Subscribed date' },
+  { value: 'latest_upload', label: 'Latest upload' },
+  { value: 'upload_count', label: 'Upload count' },
+];
+
+// "tag:<id>" | "untagged" | "all" — one control for both the tag and
+// untagged filters, since they're mutually exclusive.
+type TagFilterValue = 'all' | 'untagged' | `tag:${number}`;
+
 export default function ChannelsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
-  const { data: channelsData, isLoading } = useChannels();
+  const [tagFilterValue, setTagFilterValue] = useState<TagFilterValue>('all');
+  const [source, setSource] = useState<'manual' | 'subscription' | undefined>(undefined);
+  const [sort, setSort] = useState<ChannelSort>('name');
+  const [order, setOrder] = useState<'asc' | 'desc'>('asc');
+
+  const tagId = tagFilterValue.startsWith('tag:') ? Number(tagFilterValue.slice(4)) : undefined;
+  const untagged = tagFilterValue === 'untagged';
+
+  const { data: channelsData, isLoading } = useChannels({ tag_id: tagId, untagged, source, sort, order });
   const { data: tagsData } = useTags();
-  const [searchParams] = useSearchParams();
-  const highlightId = searchParams.get('highlight');
 
   const channels = channelsData as Channel[] | undefined;
   const createChannelMutation = useCreateChannel();
@@ -87,10 +111,49 @@ export default function ChannelsPage() {
         <AddChannelModal onClose={() => setShowAddModal(false)} onSubmit={handleAddChannel} tags={tagsData || []} />
       )}
 
+      <div className="channels-filter-bar">
+        <select value={tagFilterValue} onChange={(e) => setTagFilterValue(e.target.value as TagFilterValue)}>
+          <option value="all">All tags</option>
+          <option value="untagged">Untagged</option>
+          {tagsData?.map((tag) => (
+            <option key={tag.id} value={`tag:${tag.id}`}>
+              {tag.name}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={source ?? 'all'}
+          onChange={(e) => setSource(e.target.value === 'all' ? undefined : (e.target.value as 'manual' | 'subscription'))}
+        >
+          <option value="all">All sources</option>
+          <option value="manual">Added manually</option>
+          <option value="subscription">Subscribed</option>
+        </select>
+
+        <div className="sort-control">
+          <select value={sort} onChange={(e) => setSort(e.target.value as ChannelSort)}>
+            {SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                Sort: {opt.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="sort-order-btn"
+            title={order === 'asc' ? 'Ascending' : 'Descending'}
+            onClick={() => setOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+          >
+            {order === 'asc' ? '↑' : '↓'}
+          </button>
+        </div>
+      </div>
+
       {isLoading ? (
         <p>Loading...</p>
       ) : !channels || channels.length === 0 ? (
-        <p>No channels yet</p>
+        <p>No channels match these filters</p>
       ) : (
         <div className="channels-grid">
           {channels.map((channel) => (
@@ -98,7 +161,6 @@ export default function ChannelsPage() {
               key={channel.id}
               channel={channel}
               allTags={tagsData || []}
-              highlighted={highlightId !== null && String(channel.id) === highlightId}
               onDelete={() => handleDeleteChannel(channel.id, channel.title, channel.upload_count)}
               onUpdate={handleUpdateChannel}
               onAckUnsubscribe={handleAckUnsubscribe}

@@ -5,6 +5,7 @@ PROJECT_OUTLINE.md §6) plus shared Channel <-> ChannelOut conversion.
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 import httpx
 from sqlalchemy import func, select
@@ -13,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models import AppSettings, Channel, ChannelTag, Tag, Upload
 from app.schemas import ChannelOut, ChannelRef, TagOut
-from app.services import key_pool, youtube_client
+from app.services import avatar_store, key_pool, youtube_client
 from app.services.backfill_service import enqueue_backfill_task
 from app.services.channel_parser import ChannelLinkParseError, parse_channel_link
 
@@ -103,11 +104,13 @@ async def create_manual_channel(
         await session.refresh(existing)
         return existing
 
+    avatar_url = await avatar_store.store_channel_avatar(http_client, info.id, info.thumbnail_url)
+
     channel = Channel(
         youtube_channel_id=info.id,
         title=info.title,
         handle=info.handle,
-        thumbnail_url=info.thumbnail_url,
+        thumbnail_url=avatar_url or info.thumbnail_url,
         source="manual",
         subscription_status="subscribed",
         upload_fetch_method=upload_fetch_method,
@@ -125,22 +128,31 @@ async def create_manual_channel(
 class UploadStats:
     count: int = 0
     oldest_at: datetime | None = None
+    latest_at: datetime | None = None
 
 
 async def get_upload_stats(session: AsyncSession, channel_ids: list[int]) -> dict[int, UploadStats]:
     """One aggregate query for however many channels are being rendered,
-    rather than a per-channel count/min query — used by both the channel
-    list and single-channel endpoints."""
+    rather than a per-channel count/min/max query — used by both the
+    channel list and single-channel endpoints."""
 
     if not channel_ids:
         return {}
 
     result = await session.execute(
-        select(Upload.channel_id, func.count(Upload.id), func.min(Upload.published_at))
+        select(
+            Upload.channel_id,
+            func.count(Upload.id),
+            func.min(Upload.published_at),
+            func.max(Upload.published_at),
+        )
         .where(Upload.channel_id.in_(channel_ids))
         .group_by(Upload.channel_id)
     )
-    return {channel_id: UploadStats(count=count, oldest_at=oldest) for channel_id, count, oldest in result.all()}
+    return {
+        channel_id: UploadStats(count=count, oldest_at=oldest, latest_at=latest)
+        for channel_id, count, oldest, latest in result.all()
+    }
 
 
 async def load_channel(session: AsyncSession, channel_id: int) -> Channel | None:
@@ -181,12 +193,48 @@ def channel_to_out(channel: Channel, settings: AppSettings, stats: UploadStats =
         backfill_status=_backfill_status(channel),
         upload_count=stats.count,
         oldest_upload_at=stats.oldest_at,
+        latest_upload_at=stats.latest_at,
         last_synced_at=channel.last_synced_at,
         tags=[TagOut(id=ct.tag.id, name=ct.tag.name, color=ct.tag.color) for ct in channel.channel_tags],
+        subscribed_at=channel.subscribed_at,
         added_at=channel.added_at,
         updated_at=channel.updated_at,
     )
 
 
 def channel_to_ref(channel: Channel) -> ChannelRef:
-    return ChannelRef(id=channel.id, title=channel.title, thumbnail_url=channel.thumbnail_url)
+    return ChannelRef(
+        id=channel.id,
+        title=channel.title,
+        thumbnail_url=channel.thumbnail_url,
+        youtube_channel_id=channel.youtube_channel_id,
+        handle=channel.handle,
+    )
+
+
+ChannelSortField = Literal["name", "subscribed_at", "latest_upload", "upload_count"]
+
+
+def sort_channels(
+    channels: list[Channel],
+    stats_by_channel: dict[int, UploadStats],
+    sort: ChannelSortField,
+    order: Literal["asc", "desc"],
+) -> list[Channel]:
+    """Sorted in Python (not SQL) since it needs the aggregated upload
+    stats, already computed separately for the list endpoint — channel
+    counts are small enough that this is simpler than a SQL-side join."""
+
+    _MIN_DT = datetime.min
+
+    def _key(channel: Channel):
+        if sort == "name":
+            return channel.title.lower()
+        if sort == "subscribed_at":
+            return channel.subscribed_at or channel.added_at
+        stats = stats_by_channel.get(channel.id, UploadStats())
+        if sort == "latest_upload":
+            return stats.latest_at or _MIN_DT
+        return stats.count  # "upload_count"
+
+    return sorted(channels, key=_key, reverse=(order == "desc"))

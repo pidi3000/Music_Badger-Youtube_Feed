@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom';
 import { Upload } from '../api/feed';
+import { youtubeChannelUrl } from '../utils/youtube';
 import ChannelAvatar from './ChannelAvatar';
 import '../styles/upload-card.css';
 
@@ -7,8 +7,15 @@ interface UploadCardProps {
   upload: Upload;
 }
 
+const VIDEO_TYPE_LABELS: Record<Upload['video_type'], string> = {
+  video: 'Video',
+  short: 'Short',
+  live: 'Live',
+};
+
 export default function UploadCard({ upload }: UploadCardProps) {
   const videoUrl = `https://www.youtube.com/watch?v=${upload.youtube_video_id}`;
+  const channelUrl = youtubeChannelUrl(upload.channel);
   const publishedDate = new Date(upload.published_at).toLocaleDateString();
 
   const handleClick = () => {
@@ -23,17 +30,22 @@ export default function UploadCard({ upload }: UploadCardProps) {
         ) : (
           <div className="placeholder">No image</div>
         )}
+        <span className={`video-type-badge video-type-${upload.video_type}`}>
+          {VIDEO_TYPE_LABELS[upload.video_type]}
+        </span>
       </div>
       <div className="upload-info">
         <h3>{upload.title}</h3>
-        <Link
-          to={`/channels?highlight=${upload.channel.id}`}
+        <a
+          href={channelUrl}
+          target="_blank"
+          rel="noopener noreferrer"
           className="channel-info"
           onClick={(e) => e.stopPropagation()}
         >
           <ChannelAvatar src={upload.channel.thumbnail_url} title={upload.channel.title} className="channel-thumb" />
           <span>{upload.channel.title}</span>
-        </Link>
+        </a>
         <div className="meta">
           <span className="date">{publishedDate}</span>
           {upload.fetched_via === 'rss' && <span className="badge">RSS</span>}

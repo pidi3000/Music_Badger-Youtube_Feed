@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from app.encryption import encrypt
-from app.models import ApiKey, BackfillTask, Channel, Upload
+from app.models import ApiKey, BackfillTask, Channel, ChannelTag, Upload
 from app.services import youtube_client
 
 
@@ -81,6 +81,32 @@ async def test_add_channel_by_handle(authed_client, db_session, monkeypatch):
 
     listed = await authed_client.get("/api/channels")
     assert len(listed.json()) == 1
+
+
+@pytest.mark.asyncio
+async def test_add_channel_stores_avatar_locally_instead_of_hotlinking(authed_client, db_session, monkeypatch):
+    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    await db_session.commit()
+
+    async def fake_resolve_by_handle(client, api_key, handle):
+        return youtube_client.ChannelInfo(
+            id="UCavatar1", title="Avatar Channel", thumbnail_url="https://example.com/remote-thumb.jpg", handle=handle
+        )
+
+    monkeypatch.setattr(youtube_client, "resolve_channel_by_handle", fake_resolve_by_handle)
+
+    from app.services import avatar_store, channel_service
+
+    async def fake_store_channel_avatar(client, youtube_channel_id, remote_url):
+        assert youtube_channel_id == "UCavatar1"
+        assert remote_url == "https://example.com/remote-thumb.jpg"
+        return "/media/avatars/UCavatar1.jpg"
+
+    monkeypatch.setattr(channel_service.avatar_store, "store_channel_avatar", fake_store_channel_avatar)
+
+    response = await authed_client.post("/api/channels", json={"channel_link": "@avatarchan", "tag_ids": []})
+    assert response.status_code == 201
+    assert response.json()["thumbnail_url"] == "/media/avatars/UCavatar1.jpg"
 
 
 @pytest.mark.asyncio
@@ -385,6 +411,148 @@ async def test_feed_pagination_covers_all_items_without_duplicates(authed_client
             break
 
     assert seen_ids == [f"vid{i}" for i in range(5)]
+
+
+@pytest.mark.asyncio
+async def test_feed_total_uploads_and_video_type_filter(authed_client, db_session):
+    channel = Channel(youtube_channel_id="UCtypes1", title="Types Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+
+    now = datetime.utcnow()
+    db_session.add_all(
+        [
+            Upload(
+                channel_id=channel.id,
+                youtube_video_id="vid-video",
+                title="A Video",
+                published_at=now,
+                thumbnail_url=None,
+                fetched_via="api",
+                video_type="video",
+            ),
+            Upload(
+                channel_id=channel.id,
+                youtube_video_id="vid-short",
+                title="A Short",
+                published_at=now - timedelta(hours=1),
+                thumbnail_url=None,
+                fetched_via="api",
+                video_type="short",
+            ),
+            Upload(
+                channel_id=channel.id,
+                youtube_video_id="vid-live",
+                title="A Livestream",
+                published_at=now - timedelta(hours=2),
+                thumbnail_url=None,
+                fetched_via="api",
+                video_type="live",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    all_response = await authed_client.get("/api/feed")
+    all_body = all_response.json()
+    assert all_body["total_uploads"] == 3
+    assert len(all_body["items"]) == 3
+    assert {item["video_type"] for item in all_body["items"]} == {"video", "short", "live"}
+
+    shorts_only = await authed_client.get("/api/feed", params={"video_type": "short"})
+    shorts_body = shorts_only.json()
+    assert [item["youtube_video_id"] for item in shorts_body["items"]] == ["vid-short"]
+    # total_uploads is an app-wide count, unaffected by the filter.
+    assert shorts_body["total_uploads"] == 3
+
+    # ChannelRef now also carries enough to build a real youtube.com link.
+    assert all_body["items"][0]["channel"]["youtube_channel_id"] == "UCtypes1"
+
+
+@pytest.mark.asyncio
+async def test_channels_untagged_filter(authed_client, db_session):
+    tag_created = await authed_client.post("/api/tags", json={"name": "Music", "color": "#ff0000"})
+    tag_id = tag_created.json()["id"]
+
+    tagged = Channel(youtube_channel_id="UCtagged1", title="Tagged Chan", source="manual")
+    untagged = Channel(youtube_channel_id="UCuntagged1", title="Untagged Chan", source="manual")
+    db_session.add_all([tagged, untagged])
+    await db_session.flush()
+    db_session.add(ChannelTag(channel_id=tagged.id, tag_id=tag_id))
+    await db_session.commit()
+
+    response = await authed_client.get("/api/channels", params={"untagged": "true"})
+    titles = {c["title"] for c in response.json()}
+    assert titles == {"Untagged Chan"}
+
+
+@pytest.mark.asyncio
+async def test_channels_source_filter(authed_client, db_session):
+    manual = Channel(youtube_channel_id="UCsrcmanual", title="Manual Chan", source="manual")
+    subscription = Channel(youtube_channel_id="UCsrcsub", title="Sub Chan", source="subscription")
+    both = Channel(youtube_channel_id="UCsrcboth", title="Both Chan", source="both")
+    db_session.add_all([manual, subscription, both])
+    await db_session.commit()
+
+    manual_only = await authed_client.get("/api/channels", params={"source": "manual"})
+    assert {c["title"] for c in manual_only.json()} == {"Manual Chan", "Both Chan"}
+
+    subscription_only = await authed_client.get("/api/channels", params={"source": "subscription"})
+    assert {c["title"] for c in subscription_only.json()} == {"Sub Chan", "Both Chan"}
+
+
+@pytest.mark.asyncio
+async def test_channels_sort_by_upload_count_and_order(authed_client, db_session):
+    few = Channel(youtube_channel_id="UCfew1", title="Few Uploads", source="manual")
+    many = Channel(youtube_channel_id="UCmany1", title="Many Uploads", source="manual")
+    db_session.add_all([few, many])
+    await db_session.flush()
+
+    db_session.add(
+        Upload(
+            channel_id=few.id,
+            youtube_video_id="fv1",
+            title="One",
+            published_at=datetime.utcnow(),
+            thumbnail_url=None,
+            fetched_via="api",
+        )
+    )
+    for i in range(3):
+        db_session.add(
+            Upload(
+                channel_id=many.id,
+                youtube_video_id=f"mv{i}",
+                title=f"Many {i}",
+                published_at=datetime.utcnow(),
+                thumbnail_url=None,
+                fetched_via="api",
+            )
+        )
+    await db_session.commit()
+
+    ascending = await authed_client.get("/api/channels", params={"sort": "upload_count", "order": "asc"})
+    assert [c["title"] for c in ascending.json()] == ["Few Uploads", "Many Uploads"]
+
+    descending = await authed_client.get("/api/channels", params={"sort": "upload_count", "order": "desc"})
+    assert [c["title"] for c in descending.json()] == ["Many Uploads", "Few Uploads"]
+
+
+@pytest.mark.asyncio
+async def test_channels_subscribed_at_is_exposed(authed_client, db_session):
+    subscribed_date = datetime(2022, 3, 1, 9, 0, 0)
+    channel = Channel(
+        youtube_channel_id="UCsubdate1",
+        title="Subscribed Chan",
+        source="subscription",
+        subscribed_at=subscribed_date,
+    )
+    db_session.add(channel)
+    await db_session.commit()
+
+    response = await authed_client.get("/api/channels")
+    body = response.json()[0]
+    assert body["subscribed_at"] == subscribed_date.isoformat()
 
 
 @pytest.mark.asyncio

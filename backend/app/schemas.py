@@ -88,8 +88,10 @@ class ChannelOut(BaseModel):
     backfill_status: BackfillStatus
     upload_count: int
     oldest_upload_at: datetime | None
+    latest_upload_at: datetime | None
     last_synced_at: datetime | None
     tags: list[TagOut]
+    subscribed_at: datetime | None
     added_at: datetime
     updated_at: datetime
 
@@ -110,10 +112,15 @@ class ChannelUpdate(BaseModel):
 
 
 # -------------------------------------------------------------- upload ----
+VideoType = Literal["video", "short", "live"]
+
+
 class ChannelRef(BaseModel):
     id: int
     title: str
     thumbnail_url: str | None
+    youtube_channel_id: str
+    handle: str | None
 
 
 class UploadOut(BaseModel):
@@ -124,11 +131,13 @@ class UploadOut(BaseModel):
     published_at: datetime
     thumbnail_url: str | None
     fetched_via: FetchMethod
+    video_type: VideoType
 
 
 class FeedPage(BaseModel):
     items: list[UploadOut]
     next_cursor: str | None
+    total_uploads: int
 
 
 # ------------------------------------------------------------- api key ----

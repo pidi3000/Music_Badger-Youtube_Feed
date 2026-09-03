@@ -2,12 +2,12 @@ import base64
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import select, tuple_
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.orm import selectinload
 
 from app.deps import DbSession, RequireAuth
 from app.models import Channel, ChannelTag, Upload
-from app.schemas import ChannelRef, FeedPage, UploadOut
+from app.schemas import ChannelRef, FeedPage, UploadOut, VideoType
 
 router = APIRouter(prefix="/feed", tags=["feed"], dependencies=[RequireAuth])
 
@@ -31,6 +31,7 @@ async def get_feed(
     session: DbSession,
     tag_id: int | None = None,
     channel_id: int | None = None,
+    video_type: VideoType | None = None,
     cursor: str | None = None,
     limit: int = 30,
 ):
@@ -46,6 +47,8 @@ async def get_feed(
         ).where(ChannelTag.tag_id == tag_id)
     if channel_id is not None:
         query = query.where(Upload.channel_id == channel_id)
+    if video_type is not None:
+        query = query.where(Upload.video_type == video_type)
     if cursor is not None:
         cursor_published_at, cursor_id = _decode_cursor(cursor)
         query = query.where(
@@ -55,6 +58,8 @@ async def get_feed(
     query = query.limit(limit + 1)
     result = await session.execute(query)
     uploads = list(result.scalars())
+
+    total_uploads = (await session.execute(select(func.count(Upload.id)))).scalar_one()
     await session.commit()
 
     has_more = len(uploads) > limit
@@ -63,15 +68,22 @@ async def get_feed(
     items = [
         UploadOut(
             id=u.id,
-            channel=ChannelRef(id=u.channel.id, title=u.channel.title, thumbnail_url=u.channel.thumbnail_url),
+            channel=ChannelRef(
+                id=u.channel.id,
+                title=u.channel.title,
+                thumbnail_url=u.channel.thumbnail_url,
+                youtube_channel_id=u.channel.youtube_channel_id,
+                handle=u.channel.handle,
+            ),
             youtube_video_id=u.youtube_video_id,
             title=u.title,
             published_at=u.published_at,
             thumbnail_url=u.thumbnail_url,
             fetched_via=u.fetched_via,
+            video_type=u.video_type,
         )
         for u in uploads
     ]
 
     next_cursor = _encode_cursor(uploads[-1].published_at, uploads[-1].id) if has_more and uploads else None
-    return FeedPage(items=items, next_cursor=next_cursor)
+    return FeedPage(items=items, next_cursor=next_cursor, total_uploads=total_uploads)

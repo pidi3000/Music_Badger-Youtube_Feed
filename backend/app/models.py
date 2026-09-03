@@ -74,6 +74,11 @@ class Channel(Base):
     unsubscribed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     unsubscribed_ack: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # The actual date the user subscribed on YouTube (subscriptions.list
+    # snippet.publishedAt), set on subscription import. Null for
+    # manual-only channels, which have no such date.
+    subscribed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     # Per-channel override of AppSettings.upload_fetch_method. Null = use default.
     upload_fetch_method: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
@@ -123,6 +128,11 @@ class Upload(Base):
 
     # "api" | "rss" — how this row's data was sourced (transparency, §4)
     fetched_via: Mapped[str] = mapped_column(String(8))
+
+    # "video" | "short" | "live" — best-effort classification (duration +
+    # live-broadcast status via the Data API; RSS-sourced uploads can't be
+    # classified without an extra API call, so they default to "video").
+    video_type: Mapped[str] = mapped_column(String(8), default="video")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
