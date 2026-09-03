@@ -6,9 +6,15 @@ import '../styles/backfill.css';
 
 export default function BackfillPage() {
   const { data: tasksData, isLoading } = useBackfillTasks(undefined, {
-    refetchInterval: () => {
-      // Poll every 5 seconds if any task is queued, in_progress, or paused_quota
-      const tasks = tasksData as BackfillTask[] | undefined;
+    refetchInterval: (query) => {
+      // Poll every 5 seconds if any task is queued, in_progress, or
+      // paused_quota. Reads query.state.data (the value TanStack Query
+      // passes in), not the `tasksData` this hook call is about to
+      // return — refetchInterval runs synchronously during this very
+      // useBackfillTasks() call, before that destructuring assignment
+      // completes, so closing over `tasksData` here hits its temporal
+      // dead zone.
+      const tasks = query.state.data as BackfillTask[] | undefined;
       const hasActiveTask = tasks?.some(
         (task) =>
           task.status === 'queued' ||
