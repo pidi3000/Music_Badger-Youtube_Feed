@@ -18,6 +18,7 @@ export interface Upload {
   thumbnail_url: string | null;
   fetched_via: 'api' | 'rss';
   video_type: VideoType;
+  video_type_verified: boolean;
 }
 
 export interface FeedResponse {

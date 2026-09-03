@@ -455,6 +455,7 @@ async def test_feed_total_uploads_and_video_type_filter(authed_client, db_sessio
                 thumbnail_url=None,
                 fetched_via="api",
                 video_type="short",
+                video_type_verified=True,
             ),
             Upload(
                 channel_id=channel.id,
@@ -474,6 +475,9 @@ async def test_feed_total_uploads_and_video_type_filter(authed_client, db_sessio
     assert all_body["total_uploads"] == 3
     assert len(all_body["items"]) == 3
     assert {item["video_type"] for item in all_body["items"]} == {"video", "short", "live"}
+    by_video_id = {item["youtube_video_id"]: item for item in all_body["items"]}
+    assert by_video_id["vid-short"]["video_type_verified"] is True
+    assert by_video_id["vid-video"]["video_type_verified"] is False
 
     shorts_only = await authed_client.get("/api/feed", params={"video_type": "short"})
     shorts_body = shorts_only.json()

@@ -43,6 +43,9 @@ class PlaylistItem:
     # videos.list lookup; defaults to "video" if that lookup is skipped or
     # doesn't cover this id (e.g. a deleted/private video).
     video_type: str = "video"
+    # True only when video_type was confirmed by the strict-mode redirect
+    # check, not just guessed from duration — see VideoClassification.
+    video_type_verified: bool = False
 
 
 @dataclass(frozen=True)
@@ -156,9 +159,18 @@ async def _is_actual_short(client: httpx.AsyncClient, video_id: str) -> bool | N
     return None
 
 
+@dataclass(frozen=True)
+class VideoClassification:
+    video_type: str
+    # True only when the strict-mode redirect check (_is_actual_short) ran
+    # and gave a conclusive answer — never for the duration heuristic, live
+    # videos, or an inconclusive check.
+    verified: bool = False
+
+
 async def _classify_video_types(
     client: httpx.AsyncClient, api_key: str, video_ids: list[str], strict_shorts: bool = False
-) -> dict[str, str]:
+) -> dict[str, VideoClassification]:
     """Best-effort video/short/live classification via one batched
     videos.list call — `id` accepts up to 50 comma-separated ids for a
     single quota unit, regardless of how many parts are requested.
@@ -179,14 +191,14 @@ async def _classify_video_types(
         api_key=api_key,
     )
 
-    types: dict[str, str] = {}
+    classifications: dict[str, VideoClassification] = {}
     for item in data.get("items", []):
         video_id = item.get("id")
         if not video_id:
             continue
         snippet = item.get("snippet", {})
         if snippet.get("liveBroadcastContent") in ("live", "upcoming") or "liveStreamingDetails" in item:
-            types[video_id] = "live"
+            classifications[video_id] = VideoClassification("live")
             continue
         duration = item.get("contentDetails", {}).get("duration")
         seconds = _parse_duration_seconds(duration) if duration else 0
@@ -194,11 +206,11 @@ async def _classify_video_types(
         if strict_shorts and 0 < seconds <= _SHORTS_CANDIDATE_MAX_SECONDS:
             is_short = await _is_actual_short(client, video_id)
             if is_short is not None:
-                types[video_id] = "short" if is_short else "video"
+                classifications[video_id] = VideoClassification("short" if is_short else "video", verified=True)
                 continue
 
-        types[video_id] = "short" if 0 < seconds <= _SHORT_MAX_SECONDS else "video"
-    return types
+        classifications[video_id] = VideoClassification("short" if 0 < seconds <= _SHORT_MAX_SECONDS else "video")
+    return classifications
 
 
 async def get_channel(client: httpx.AsyncClient, api_key: str, channel_id: str) -> ChannelInfo | None:
@@ -279,13 +291,22 @@ async def list_uploads(
     # themselves. A genuine quota exhaustion (YoutubeQuotaExceeded) is left
     # to propagate as usual so key rotation still reacts to it.
     try:
-        types = await _classify_video_types(
+        classifications = await _classify_video_types(
             client, api_key, [item.video_id for item in items], strict_shorts=strict_shorts
         )
     except YoutubeApiError:
-        types = {}
-    if types:
-        items = [replace(item, video_type=types.get(item.video_id, "video")) for item in items]
+        classifications = {}
+    if classifications:
+        updated_items = []
+        for item in items:
+            classification = classifications.get(item.video_id)
+            if classification is None:
+                updated_items.append(item)
+            else:
+                updated_items.append(
+                    replace(item, video_type=classification.video_type, video_type_verified=classification.verified)
+                )
+        items = updated_items
 
     return Page(items=items, next_page_token=data.get("nextPageToken"))
 

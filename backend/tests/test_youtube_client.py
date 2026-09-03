@@ -246,6 +246,10 @@ def test_parse_duration_seconds(duration, expected_seconds):
     assert youtube_client._parse_duration_seconds(duration) == expected_seconds
 
 
+def _types_only(classifications: dict) -> dict:
+    return {video_id: c.video_type for video_id, c in classifications.items()}
+
+
 @pytest.mark.asyncio
 async def test_classify_video_types_short_via_duration():
     response = {
@@ -258,9 +262,10 @@ async def test_classify_video_types_short_via_duration():
         ]
     }
     async with _mock_client(response) as client:
-        types = await youtube_client._classify_video_types(client, "fake-key", ["vid-short"])
+        classifications = await youtube_client._classify_video_types(client, "fake-key", ["vid-short"])
 
-    assert types == {"vid-short": "short"}
+    assert _types_only(classifications) == {"vid-short": "short"}
+    assert classifications["vid-short"].verified is False
 
 
 @pytest.mark.asyncio
@@ -275,9 +280,10 @@ async def test_classify_video_types_live_via_broadcast_content():
         ]
     }
     async with _mock_client(response) as client:
-        types = await youtube_client._classify_video_types(client, "fake-key", ["vid-live"])
+        classifications = await youtube_client._classify_video_types(client, "fake-key", ["vid-live"])
 
-    assert types == {"vid-live": "live"}
+    assert _types_only(classifications) == {"vid-live": "live"}
+    assert classifications["vid-live"].verified is False
 
 
 @pytest.mark.asyncio
@@ -295,9 +301,9 @@ async def test_classify_video_types_live_via_ended_livestream_details():
         ]
     }
     async with _mock_client(response) as client:
-        types = await youtube_client._classify_video_types(client, "fake-key", ["vid-ended-live"])
+        classifications = await youtube_client._classify_video_types(client, "fake-key", ["vid-ended-live"])
 
-    assert types == {"vid-ended-live": "live"}
+    assert _types_only(classifications) == {"vid-ended-live": "live"}
 
 
 @pytest.mark.asyncio
@@ -312,17 +318,17 @@ async def test_classify_video_types_normal_length_is_video():
         ]
     }
     async with _mock_client(response) as client:
-        types = await youtube_client._classify_video_types(client, "fake-key", ["vid-normal"])
+        classifications = await youtube_client._classify_video_types(client, "fake-key", ["vid-normal"])
 
-    assert types == {"vid-normal": "video"}
+    assert _types_only(classifications) == {"vid-normal": "video"}
 
 
 @pytest.mark.asyncio
 async def test_classify_video_types_returns_empty_for_no_ids():
     async with _mock_client({"items": []}) as client:
-        types = await youtube_client._classify_video_types(client, "fake-key", [])
+        classifications = await youtube_client._classify_video_types(client, "fake-key", [])
 
-    assert types == {}
+    assert classifications == {}
 
 
 @pytest.mark.asyncio
@@ -416,9 +422,10 @@ async def test_classify_video_types_strict_off_never_makes_shorts_request():
     }
     client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 302})
     async with client:
-        types = await youtube_client._classify_video_types(client, "fake-key", ["vid1"])
+        classifications = await youtube_client._classify_video_types(client, "fake-key", ["vid1"])
 
-    assert types == {"vid1": "short"}  # falls back to the duration-only heuristic
+    assert _types_only(classifications) == {"vid1": "short"}  # falls back to the duration-only heuristic
+    assert classifications["vid1"].verified is False
     assert call_log == []
 
 
@@ -426,7 +433,8 @@ async def test_classify_video_types_strict_off_never_makes_shorts_request():
 async def test_classify_video_types_strict_on_overrides_duration_heuristic():
     """A 45s video that is NOT actually a Short (e.g. a widescreen clip)
     must be corrected to "video" by the redirect check when strict mode
-    is on, even though duration alone would call it a short."""
+    is on, even though duration alone would call it a short — and the
+    correction must be recorded as verified."""
     response = {
         "items": [
             {"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}
@@ -434,9 +442,10 @@ async def test_classify_video_types_strict_on_overrides_duration_heuristic():
     }
     client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 302})
     async with client:
-        types = await youtube_client._classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+        classifications = await youtube_client._classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
 
-    assert types == {"vid1": "video"}
+    assert _types_only(classifications) == {"vid1": "video"}
+    assert classifications["vid1"].verified is True
     assert len(call_log) == 1
 
 
@@ -449,9 +458,10 @@ async def test_classify_video_types_strict_on_confirms_actual_short():
     }
     client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 200})
     async with client:
-        types = await youtube_client._classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+        classifications = await youtube_client._classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
 
-    assert types == {"vid1": "short"}
+    assert _types_only(classifications) == {"vid1": "short"}
+    assert classifications["vid1"].verified is True
     assert len(call_log) == 1
 
 
@@ -467,9 +477,9 @@ async def test_classify_video_types_strict_on_skips_request_beyond_candidate_win
     }
     client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 200})
     async with client:
-        types = await youtube_client._classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+        classifications = await youtube_client._classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
 
-    assert types == {"vid1": "video"}
+    assert _types_only(classifications) == {"vid1": "video"}
     assert call_log == []
 
 
@@ -482,9 +492,10 @@ async def test_classify_video_types_strict_on_falls_back_when_check_is_inconclus
     }
     client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 500})
     async with client:
-        types = await youtube_client._classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+        classifications = await youtube_client._classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
 
-    assert types == {"vid1": "short"}  # duration heuristic fallback
+    assert _types_only(classifications) == {"vid1": "short"}  # duration heuristic fallback
+    assert classifications["vid1"].verified is False  # inconclusive check, not confirmed
     assert len(call_log) == 1
 
 
@@ -498,9 +509,9 @@ async def test_classify_video_types_strict_on_skips_live_videos():
     }
     client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 200})
     async with client:
-        types = await youtube_client._classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+        classifications = await youtube_client._classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
 
-    assert types == {"vid1": "live"}
+    assert _types_only(classifications) == {"vid1": "live"}
     assert call_log == []
 
 
@@ -528,18 +539,20 @@ async def test_list_uploads_strict_shorts_flag_reaches_the_redirect_check():
         )
 
     # The redirect check said "not a Short" — must override the duration
-    # heuristic (45s would otherwise say "short").
+    # heuristic (45s would otherwise say "short") and record it as verified.
     assert page.items[0].video_type == "video"
+    assert page.items[0].video_type_verified is True
     assert len(call_log) == 1
 
 
 @pytest.mark.asyncio
 async def test_list_uploads_defaults_video_type_when_classification_lookup_omits_the_id():
     """A video id missing from the videos.list response (e.g. deleted)
-    must not crash the upload fetch — it just defaults to "video"."""
+    must not crash the upload fetch — it just defaults to "video", unverified."""
     async with _mock_multi_client(
         {"playlistItems": PLAYLIST_ITEMS_RESPONSE, "videos": {"items": []}}
     ) as client:
         page = await youtube_client.list_uploads(client, "fake-key", "UU_x5XG1OV2P6uZZ5FSM9Ttw")
 
     assert page.items[0].video_type == "video"
+    assert page.items[0].video_type_verified is False

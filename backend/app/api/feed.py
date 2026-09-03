@@ -81,6 +81,7 @@ async def get_feed(
             thumbnail_url=u.thumbnail_url,
             fetched_via=u.fetched_via,
             video_type=u.video_type,
+            video_type_verified=u.video_type_verified,
         )
         for u in uploads
     ]

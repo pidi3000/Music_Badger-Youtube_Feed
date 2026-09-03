@@ -143,6 +143,12 @@ class Upload(Base):
     # classified without an extra API call, so they default to "video").
     video_type: Mapped[str] = mapped_column(String(8), default="video")
 
+    # True only when video_type was confirmed by the strict-mode
+    # youtube.com/shorts/{id} redirect check (AppSettings.strict_shorts_detection),
+    # not just guessed from duration. False for the duration heuristic,
+    # live videos, and anything fetched before strict mode was enabled.
+    video_type_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     channel: Mapped["Channel"] = relationship(back_populates="uploads")

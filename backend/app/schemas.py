@@ -134,6 +134,7 @@ class UploadOut(BaseModel):
     thumbnail_url: str | None
     fetched_via: FetchMethod
     video_type: VideoType
+    video_type_verified: bool
 
 
 class FeedPage(BaseModel):
