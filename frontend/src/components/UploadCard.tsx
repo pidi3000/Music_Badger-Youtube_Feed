@@ -1,4 +1,5 @@
 import { Upload } from '../api/feed';
+import ChannelAvatar from './ChannelAvatar';
 import '../styles/upload-card.css';
 
 interface UploadCardProps {
@@ -25,9 +26,7 @@ export default function UploadCard({ upload }: UploadCardProps) {
       <div className="upload-info">
         <h3>{upload.title}</h3>
         <div className="channel-info">
-          {upload.channel.thumbnail_url && (
-            <img src={upload.channel.thumbnail_url} alt={upload.channel.title} className="channel-thumb" />
-          )}
+          <ChannelAvatar src={upload.channel.thumbnail_url} title={upload.channel.title} className="channel-thumb" />
           <span>{upload.channel.title}</span>
         </div>
         <div className="meta">

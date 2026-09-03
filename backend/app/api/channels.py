@@ -8,8 +8,10 @@ from app.schemas import ChannelCreate, ChannelOut, ChannelUpdate
 from app.services import key_pool
 from app.services.channel_service import (
     ChannelResolveError,
+    UploadStats,
     channel_to_out,
     create_manual_channel,
+    get_upload_stats,
     load_channel,
     set_channel_tags,
 )
@@ -43,8 +45,9 @@ async def list_channels(
 
     result = await session.execute(query)
     channels = list(result.unique().scalars())
+    stats_by_channel = await get_upload_stats(session, [c.id for c in channels])
     await session.commit()
-    return [channel_to_out(c, settings) for c in channels]
+    return [channel_to_out(c, settings, stats_by_channel.get(c.id, UploadStats())) for c in channels]
 
 
 @router.post("", response_model=ChannelOut, status_code=status.HTTP_201_CREATED)
@@ -61,6 +64,7 @@ async def add_channel(body: ChannelCreate, session: DbSession, http_client: Http
         ) from exc
 
     channel = await load_channel(session, channel.id)
+    # Freshly created: no uploads exist yet, no need to query for stats.
     return channel_to_out(channel, settings)
 
 
@@ -71,12 +75,18 @@ async def _get_or_404(session: DbSession, channel_id: int) -> Channel:
     return channel
 
 
+async def _stats_for(session: DbSession, channel_id: int) -> UploadStats:
+    stats_by_channel = await get_upload_stats(session, [channel_id])
+    return stats_by_channel.get(channel_id, UploadStats())
+
+
 @router.get("/{channel_id}", response_model=ChannelOut)
 async def get_channel(channel_id: int, session: DbSession):
     settings = await get_or_create_settings(session)
     channel = await _get_or_404(session, channel_id)
+    stats = await _stats_for(session, channel_id)
     await session.commit()
-    return channel_to_out(channel, settings)
+    return channel_to_out(channel, settings, stats)
 
 
 @router.patch("/{channel_id}", response_model=ChannelOut)
@@ -92,9 +102,10 @@ async def update_channel(channel_id: int, body: ChannelUpdate, session: DbSessio
     if "upload_fetch_method" in body.model_fields_set:
         channel.upload_fetch_method = body.upload_fetch_method
 
+    stats = await _stats_for(session, channel_id)
     await session.commit()
     channel = await load_channel(session, channel_id)
-    return channel_to_out(channel, settings)
+    return channel_to_out(channel, settings, stats)
 
 
 @router.delete("/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -109,6 +120,7 @@ async def ack_unsubscribe(channel_id: int, session: DbSession):
     settings = await get_or_create_settings(session)
     channel = await _get_or_404(session, channel_id)
     channel.unsubscribed_ack = True
+    stats = await _stats_for(session, channel_id)
     await session.commit()
     channel = await load_channel(session, channel_id)
-    return channel_to_out(channel, settings)
+    return channel_to_out(channel, settings, stats)

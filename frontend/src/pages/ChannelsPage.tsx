@@ -65,7 +65,7 @@ export default function ChannelsPage() {
   return (
     <div className="channels-page">
       <div className="channels-header">
-        <h1>Channels</h1>
+        <h1>Channels {channels ? <span className="channel-count">({channels.length})</span> : null}</h1>
         <button className="btn-primary" onClick={() => setShowAddModal(true)}>
           Add Channel
         </button>

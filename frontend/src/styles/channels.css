@@ -13,6 +13,12 @@
   margin-bottom: 0;
 }
 
+.channel-count {
+  color: var(--text-light);
+  font-weight: 400;
+  font-size: 0.7em;
+}
+
 .btn-primary {
   background: var(--primary);
   color: white;

@@ -3,12 +3,15 @@ group so it stays fast regardless of background sync/backfill load — see
 PROJECT_OUTLINE.md §6) plus shared Channel <-> ChannelOut conversion.
 """
 
+from dataclasses import dataclass
+from datetime import datetime
+
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import AppSettings, Channel, ChannelTag, Tag
+from app.models import AppSettings, Channel, ChannelTag, Tag, Upload
 from app.schemas import ChannelOut, ChannelRef, TagOut
 from app.services import key_pool, youtube_client
 from app.services.backfill_service import enqueue_backfill_task
@@ -116,6 +119,28 @@ async def create_manual_channel(
     return channel
 
 
+@dataclass(frozen=True)
+class UploadStats:
+    count: int = 0
+    oldest_at: datetime | None = None
+
+
+async def get_upload_stats(session: AsyncSession, channel_ids: list[int]) -> dict[int, UploadStats]:
+    """One aggregate query for however many channels are being rendered,
+    rather than a per-channel count/min query — used by both the channel
+    list and single-channel endpoints."""
+
+    if not channel_ids:
+        return {}
+
+    result = await session.execute(
+        select(Upload.channel_id, func.count(Upload.id), func.min(Upload.published_at))
+        .where(Upload.channel_id.in_(channel_ids))
+        .group_by(Upload.channel_id)
+    )
+    return {channel_id: UploadStats(count=count, oldest_at=oldest) for channel_id, count, oldest in result.all()}
+
+
 async def load_channel(session: AsyncSession, channel_id: int) -> Channel | None:
     result = await session.execute(
         select(Channel)
@@ -137,7 +162,7 @@ def _backfill_status(channel: Channel) -> str:
     return latest.status
 
 
-def channel_to_out(channel: Channel, settings: AppSettings) -> ChannelOut:
+def channel_to_out(channel: Channel, settings: AppSettings, stats: UploadStats = UploadStats()) -> ChannelOut:
     return ChannelOut(
         id=channel.id,
         youtube_channel_id=channel.youtube_channel_id,
@@ -152,6 +177,9 @@ def channel_to_out(channel: Channel, settings: AppSettings) -> ChannelOut:
         effective_fetch_method=channel.upload_fetch_method or settings.upload_fetch_method,
         backfill_completed_at=channel.backfill_completed_at,
         backfill_status=_backfill_status(channel),
+        upload_count=stats.count,
+        oldest_upload_at=stats.oldest_at,
+        last_synced_at=channel.last_synced_at,
         tags=[TagOut(id=ct.tag.id, name=ct.tag.name, color=ct.tag.color) for ct in channel.channel_tags],
         added_at=channel.added_at,
         updated_at=channel.updated_at,

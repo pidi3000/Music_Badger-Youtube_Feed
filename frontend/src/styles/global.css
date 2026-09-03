@@ -177,3 +177,17 @@ p {
 .success {
   color: var(--success);
 }
+
+/* Shared fallback avatar for a missing/broken channel thumbnail — see
+   components/ChannelAvatar.tsx. Sizing (width/height/border-radius) comes
+   from whatever className the caller also applies (channel-thumb,
+   task-thumb, ...), same as the <img> it stands in for. */
+.channel-avatar-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary);
+  color: white;
+  font-weight: 600;
+  flex-shrink: 0;
+}

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Channel } from '../api/channels';
 import { Tag } from '../api/tags';
 import TagChip from './TagChip';
+import ChannelAvatar from './ChannelAvatar';
 import '../styles/channel-row.css';
 
 interface ChannelRowProps {
@@ -20,6 +21,17 @@ const BACKFILL_STATUS_COLORS: Record<string, string> = {
   completed: '#34d399',
   failed: '#ef4444',
 };
+
+function formatChannelStats(channel: Channel): string {
+  const parts = [`${channel.upload_count} upload${channel.upload_count === 1 ? '' : 's'}`];
+  if (channel.oldest_upload_at) {
+    parts.push(`oldest ${new Date(channel.oldest_upload_at).toLocaleDateString()}`);
+  }
+  parts.push(
+    channel.last_synced_at ? `updated ${new Date(channel.last_synced_at).toLocaleString()}` : 'never updated',
+  );
+  return parts.join(' · ');
+}
 
 export default function ChannelRow({
   channel,
@@ -47,9 +59,7 @@ export default function ChannelRow({
     <div className="channel-row">
       <div className="channel-main">
         <div className="channel-header">
-          {channel.thumbnail_url && (
-            <img src={channel.thumbnail_url} alt={channel.title} className="channel-thumb" />
-          )}
+          <ChannelAvatar src={channel.thumbnail_url} title={channel.title} className="channel-thumb" />
           <div>
             <h3>{channel.title}</h3>
             {channel.handle && <p className="handle">@{channel.handle}</p>}
@@ -61,6 +71,8 @@ export default function ChannelRow({
             title={channel.backfill_status}
           />
         </div>
+
+        <p className="channel-stats">{formatChannelStats(channel)}</p>
 
         {channel.subscription_status === 'unsubscribed' && !channel.unsubscribed_ack && (
           <div className="unsubscribe-warning">

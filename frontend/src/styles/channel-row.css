@@ -41,6 +41,12 @@
   margin: 0;
 }
 
+.channel-stats {
+  font-size: 13px;
+  color: var(--text-light);
+  margin: 0;
+}
+
 .source-badge {
   display: inline-block;
   background: var(--badge-info-bg);

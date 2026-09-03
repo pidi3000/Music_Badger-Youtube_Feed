@@ -1,4 +1,5 @@
 import { BackfillTask } from '../api/backfill';
+import ChannelAvatar from './ChannelAvatar';
 import '../styles/backfill-task-row.css';
 
 interface BackfillTaskRowProps {
@@ -20,9 +21,7 @@ export default function BackfillTaskRow({ task, onRetry }: BackfillTaskRowProps)
   return (
     <div className="backfill-task-row">
       <div className="task-header">
-        {task.channel.thumbnail_url && (
-          <img src={task.channel.thumbnail_url} alt={task.channel.title} />
-        )}
+        <ChannelAvatar src={task.channel.thumbnail_url} title={task.channel.title} className="task-thumb" />
         <div>
           <h3>{task.channel.title}</h3>
           <p className="status">{STATUS_LABELS[task.status]}</p>

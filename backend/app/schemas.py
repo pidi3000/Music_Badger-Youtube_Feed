@@ -83,6 +83,9 @@ class ChannelOut(BaseModel):
     effective_fetch_method: FetchMethod
     backfill_completed_at: datetime | None
     backfill_status: BackfillStatus
+    upload_count: int
+    oldest_upload_at: datetime | None
+    last_synced_at: datetime | None
     tags: list[TagOut]
     added_at: datetime
     updated_at: datetime

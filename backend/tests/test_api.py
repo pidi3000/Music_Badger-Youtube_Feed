@@ -145,6 +145,74 @@ async def test_ack_unsubscribe(authed_client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_channel_upload_stats(authed_client, db_session):
+    channel = Channel(
+        youtube_channel_id="UCstats1",
+        title="Stats Channel",
+        source="manual",
+        last_synced_at=datetime(2025, 6, 1, 12, 0, 0),
+    )
+    other_channel = Channel(youtube_channel_id="UCstats2", title="Other Channel", source="manual")
+    empty_channel = Channel(youtube_channel_id="UCstats3", title="Empty Channel", source="manual")
+    db_session.add_all([channel, other_channel, empty_channel])
+    await db_session.flush()
+
+    oldest = datetime(2024, 1, 1)
+    newest = datetime(2025, 1, 1)
+    db_session.add_all(
+        [
+            Upload(
+                channel_id=channel.id,
+                youtube_video_id="v1",
+                title="Oldest",
+                published_at=oldest,
+                thumbnail_url=None,
+                fetched_via="api",
+            ),
+            Upload(
+                channel_id=channel.id,
+                youtube_video_id="v2",
+                title="Newest",
+                published_at=newest,
+                thumbnail_url=None,
+                fetched_via="api",
+            ),
+            # Belongs to a different channel — must not leak into `channel`'s stats.
+            Upload(
+                channel_id=other_channel.id,
+                youtube_video_id="v3",
+                title="Other channel's upload",
+                published_at=oldest,
+                thumbnail_url=None,
+                fetched_via="api",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    # Via the list endpoint (the batch/aggregate path).
+    listed = await authed_client.get("/api/channels")
+    by_id = {c["id"]: c for c in listed.json()}
+    assert by_id[channel.id]["upload_count"] == 2
+    assert by_id[channel.id]["oldest_upload_at"] == oldest.isoformat()
+    assert by_id[channel.id]["last_synced_at"] == "2025-06-01T12:00:00"
+    assert by_id[other_channel.id]["upload_count"] == 1
+
+    # Via the single-channel endpoint (a separate code path).
+    single = await authed_client.get(f"/api/channels/{channel.id}")
+    assert single.json()["upload_count"] == 2
+    assert single.json()["oldest_upload_at"] == oldest.isoformat()
+
+    # A channel with zero uploads gets a well-defined default, not an error.
+    assert by_id[empty_channel.id]["upload_count"] == 0
+    assert by_id[empty_channel.id]["oldest_upload_at"] is None
+
+    single_empty = await authed_client.get(f"/api/channels/{empty_channel.id}")
+    assert single_empty.json()["upload_count"] == 0
+    assert single_empty.json()["oldest_upload_at"] is None
+
+
+@pytest.mark.asyncio
 async def test_settings_get_and_patch(authed_client):
     initial = await authed_client.get("/api/settings")
     assert initial.status_code == 200

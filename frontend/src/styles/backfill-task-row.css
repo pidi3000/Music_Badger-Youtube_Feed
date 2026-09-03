@@ -14,7 +14,7 @@
   gap: 15px;
 }
 
-.task-header img {
+.task-header .task-thumb {
   width: 48px;
   height: 48px;
   border-radius: 4px;

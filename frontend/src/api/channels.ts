@@ -21,6 +21,9 @@ export interface Channel {
   effective_fetch_method: 'api' | 'rss';
   backfill_completed_at: string | null;
   backfill_status: 'not_started' | 'queued' | 'in_progress' | 'paused_quota' | 'completed' | 'failed';
+  upload_count: number;
+  oldest_upload_at: string | null;
+  last_synced_at: string | null;
   tags: Tag[];
   added_at: string;
   updated_at: string;
