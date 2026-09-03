@@ -18,6 +18,7 @@ export default function SettingsPage() {
   const [backfillMinCount, setBackfillMinCount] = useState(0);
   const [syncIntervalMinutes, setSyncIntervalMinutes] = useState(0);
   const [backfillWorkerIntervalSeconds, setBackfillWorkerIntervalSeconds] = useState(0);
+  const [strictShortsDetection, setStrictShortsDetection] = useState(false);
   const updateSettingsMutation = useUpdateSettings();
 
   // YouTube
@@ -45,6 +46,7 @@ export default function SettingsPage() {
       setBackfillMinCount(settings.backfill_min_count);
       setSyncIntervalMinutes(settings.sync_interval_minutes);
       setBackfillWorkerIntervalSeconds(settings.backfill_worker_interval_seconds);
+      setStrictShortsDetection(settings.strict_shorts_detection);
     }
   }, [settings]);
 
@@ -65,6 +67,7 @@ export default function SettingsPage() {
         backfill_min_count: backfillMinCount,
         sync_interval_minutes: syncIntervalMinutes,
         backfill_worker_interval_seconds: backfillWorkerIntervalSeconds,
+        strict_shorts_detection: strictShortsDetection,
       });
     } catch (err) {
       showError(getErrorMessage(err, 'Failed to save settings'));
@@ -174,6 +177,22 @@ export default function SettingsPage() {
                 value={backfillWorkerIntervalSeconds}
                 onChange={(e) => setBackfillWorkerIntervalSeconds(Number(e.target.value))}
               />
+            </div>
+            <div className="strict-shorts-toggle">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={strictShortsDetection}
+                  onChange={(e) => setStrictShortsDetection(e.target.checked)}
+                />
+                Strict Shorts detection
+              </label>
+              <p className="setting-hint">
+                For uploads 3 minutes or under, checks youtube.com directly to tell an actual Short from a
+                merely-short video (the duration-only default can misclassify these). Uses no YouTube API
+                quota, but adds one extra web request per such upload and relies on an unofficial, undocumented
+                YouTube behavior.
+              </p>
             </div>
             <button type="submit">Save Settings</button>
           </form>

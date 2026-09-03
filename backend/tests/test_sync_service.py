@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from app.encryption import encrypt
-from app.models import AppSettings, Channel, SyncLog
+from app.models import ApiKey, AppSettings, Channel, SyncLog
 from app.services import avatar_store, key_pool, oauth, rss, sync_service, youtube_client
 from app.services.settings_service import get_or_create_settings
 
@@ -180,6 +180,30 @@ async def test_manual_channel_becomes_both_when_it_shows_up_as_subscription(db_s
 
     await db_session.refresh(chan)
     assert chan.source == "both"
+
+
+@pytest.mark.asyncio
+async def test_sync_channel_uploads_via_api_passes_strict_shorts_setting(db_session, monkeypatch):
+    chan = Channel(
+        youtube_channel_id="UCstrict1", title="Strict Chan", source="manual", subscription_status="subscribed"
+    )
+    db_session.add(chan)
+    db_session.add(ApiKey(label="bg-1", group="background", key_value_encrypted=encrypt("k")))
+    await db_session.commit()
+
+    settings = AppSettings(access_secret_hash="x", upload_fetch_method="api", strict_shorts_detection=True)
+
+    captured = {}
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        captured["strict_shorts"] = strict_shorts
+        return youtube_client.Page(items=[], next_page_token=None)
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    await sync_service._sync_channel_uploads_via_api(db_session, http_client=None, channel=chan, settings=settings)
+
+    assert captured["strict_shorts"] is True
 
 
 @pytest.mark.asyncio

@@ -36,6 +36,7 @@ class SettingsOut(BaseModel):
     upload_fetch_method: FetchMethod
     backfill_days: int
     backfill_min_count: int
+    strict_shorts_detection: bool
     youtube_connected: bool
     youtube_channel_title: str | None = None
 
@@ -46,6 +47,7 @@ class SettingsUpdate(BaseModel):
     upload_fetch_method: FetchMethod | None = None
     backfill_days: int | None = Field(default=None, ge=1)
     backfill_min_count: int | None = Field(default=None, ge=1)
+    strict_shorts_detection: bool | None = None
 
 
 class YoutubeAuthStart(BaseModel):

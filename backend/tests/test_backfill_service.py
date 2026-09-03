@@ -28,6 +28,34 @@ async def make_channel(db_session, youtube_channel_id: str = "UCabc123") -> Chan
 
 
 @pytest.mark.asyncio
+async def test_process_task_passes_persisted_strict_shorts_setting(db_session, monkeypatch):
+    from app.services.settings_service import get_or_create_settings
+
+    settings = await get_or_create_settings(db_session)
+    settings.strict_shorts_detection = True
+    await db_session.commit()
+
+    channel = await make_channel(db_session)
+    db_session.add(ApiKey(label="k1", group="background", key_value_encrypted=encrypt("x")))
+    await db_session.commit()
+
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=1, days=365))
+    await db_session.commit()
+
+    captured = {}
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        captured["strict_shorts"] = strict_shorts
+        return make_page([("v1", datetime.utcnow())], next_token=None)
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    await backfill_service.process_task(db_session, http_client=None, task=task)
+
+    assert captured["strict_shorts"] is True
+
+
+@pytest.mark.asyncio
 async def test_completes_when_min_count_and_date_target_both_reached(db_session, monkeypatch):
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="k1", group="background", key_value_encrypted=encrypt("x")))
@@ -44,7 +72,7 @@ async def test_completes_when_min_count_and_date_target_both_reached(db_session,
         ]
     )
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
         return next(pages)
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
@@ -69,7 +97,7 @@ async def test_completes_when_channel_has_fewer_uploads_than_target(db_session, 
 
     now = datetime.utcnow()
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
         return make_page([("only-video", now)], next_token=None)
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
@@ -90,7 +118,7 @@ async def test_channel_with_no_uploads_completes_immediately(db_session, monkeyp
     task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings())
     await db_session.commit()
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
         return make_page([], next_token=None)
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
@@ -115,7 +143,7 @@ async def test_pauses_on_quota_exhaustion_and_resumes_from_cursor(db_session, mo
     now = datetime.utcnow()
     seen_tokens: list[str | None] = []
 
-    async def fake_list_uploads_first_page_then_quota(client, api_key, playlist_id, page_token=None, max_results=50):
+    async def fake_list_uploads_first_page_then_quota(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
         seen_tokens.append(page_token)
         if page_token is None:
             return make_page([("v1", now)], next_token="p2")
@@ -137,7 +165,7 @@ async def test_pauses_on_quota_exhaustion_and_resumes_from_cursor(db_session, mo
     stored_key.quota_resets_at = None
     await db_session.commit()
 
-    async def fake_list_uploads_second_page(client, api_key, playlist_id, page_token=None, max_results=50):
+    async def fake_list_uploads_second_page(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
         seen_tokens.append(page_token)
         assert page_token == "p2"
         return make_page([("v2", now - timedelta(days=400))], next_token=None)
@@ -166,7 +194,7 @@ async def test_worker_tick_processes_queued_and_paused_but_not_completed(db_sess
 
     now = datetime.utcnow()
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
         return make_page([("v1", now)], next_token=None)
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)

@@ -7,6 +7,7 @@ export interface Settings {
   upload_fetch_method: 'api' | 'rss';
   backfill_days: number;
   backfill_min_count: number;
+  strict_shorts_detection: boolean;
   youtube_connected: boolean;
   youtube_channel_title: string | null;
 }
@@ -22,6 +23,7 @@ export async function updateSettings(
     upload_fetch_method: 'api' | 'rss';
     backfill_days: number;
     backfill_min_count: number;
+    strict_shorts_detection: boolean;
   }>,
 ): Promise<Settings> {
   return apiCall('/api/settings', {

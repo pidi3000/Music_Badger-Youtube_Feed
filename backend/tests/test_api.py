@@ -312,6 +312,7 @@ async def test_settings_get_and_patch(authed_client):
     assert body["upload_fetch_method"] == "api"
     assert body["backfill_days"] == 365
     assert body["backfill_min_count"] == 50
+    assert body["strict_shorts_detection"] is False
 
     updated = await authed_client.patch(
         "/api/settings", json={"upload_fetch_method": "rss", "backfill_min_count": 10}
@@ -323,6 +324,21 @@ async def test_settings_get_and_patch(authed_client):
     assert updated_body["backfill_days"] == 365
     assert updated_body["sync_interval_minutes"] == 30
     assert updated_body["backfill_worker_interval_seconds"] == 60
+    # untouched by this PATCH, which didn't include it
+    assert updated_body["strict_shorts_detection"] is False
+
+
+@pytest.mark.asyncio
+async def test_settings_strict_shorts_detection_toggle(authed_client):
+    enabled = await authed_client.patch("/api/settings", json={"strict_shorts_detection": True})
+    assert enabled.json()["strict_shorts_detection"] is True
+
+    # persisted, not just echoed back
+    refetched = await authed_client.get("/api/settings")
+    assert refetched.json()["strict_shorts_detection"] is True
+
+    disabled = await authed_client.patch("/api/settings", json={"strict_shorts_detection": False})
+    assert disabled.json()["strict_shorts_detection"] is False
 
 
 @pytest.mark.asyncio
@@ -577,7 +593,7 @@ async def test_backfill_tasks_list_and_retry(authed_client, db_session, monkeypa
     listed = await authed_client.get("/api/backfill-tasks", params={"status": "failed"})
     assert len(listed.json()) == 1
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
         return youtube_client.Page(items=[], next_page_token=None)
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)

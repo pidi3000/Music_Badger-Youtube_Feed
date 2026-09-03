@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AppSettings, BackfillTask, Channel
 from app.services import key_pool, youtube_client
+from app.services.settings_service import get_or_create_settings
 from app.services.upload_store import upsert_uploads
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
         await session.commit()
         return
 
+    settings = await get_or_create_settings(session)
     playlist_id = youtube_client.uploads_playlist_id_for_channel(channel.youtube_channel_id)
     target_after_dt = datetime.combine(task.target_after, datetime.min.time())
 
@@ -75,7 +77,11 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
 
             async def _call(api_key: str, _cursor: str | None = cursor) -> youtube_client.Page:
                 return await youtube_client.list_uploads(
-                    http_client, api_key, playlist_id, page_token=_cursor
+                    http_client,
+                    api_key,
+                    playlist_id,
+                    page_token=_cursor,
+                    strict_shorts=settings.strict_shorts_detection,
                 )
 
             page = await key_pool.call_with_key_rotation(session, "background", _call)

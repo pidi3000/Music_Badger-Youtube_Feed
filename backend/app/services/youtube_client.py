@@ -115,10 +115,13 @@ _ISO8601_DURATION_RE = re.compile(
     r"^P(?:\d+D)?T?(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?$"
 )
 
-# YouTube's original Shorts length limit. Duration alone is a heuristic
-# (Shorts also require a vertical/square aspect ratio, which isn't cheap to
-# check), but it's the only signal available without extra quota cost.
+# YouTube's original Shorts length limit — the default (quota-only) heuristic.
 _SHORT_MAX_SECONDS = 60
+
+# YouTube's current Shorts length cap (raised from 60s in 2024). Only a
+# video at or under this length can possibly be a Short at all, so this is
+# the upper bound for even attempting the strict-mode redirect check below.
+_SHORTS_CANDIDATE_MAX_SECONDS = 180
 
 
 def _parse_duration_seconds(duration: str) -> int:
@@ -131,13 +134,40 @@ def _parse_duration_seconds(duration: str) -> int:
     return hours * 3600 + minutes * 60 + seconds
 
 
+async def _is_actual_short(client: httpx.AsyncClient, video_id: str) -> bool | None:
+    """Unofficial (not part of the Data API, costs no quota) but well-known
+    check: YouTube serves `/shorts/{id}` directly (200) for an actual Short
+    and 3xx-redirects it to the normal `/watch` page otherwise — the only
+    way to see the aspect-ratio signal the Data API doesn't expose for
+    videos you don't own. Since it's undocumented and not guaranteed, an
+    error or unexpected response returns None so the caller falls back to
+    the duration heuristic instead of guessing."""
+
+    try:
+        response = await client.get(
+            f"https://www.youtube.com/shorts/{video_id}", follow_redirects=False, timeout=10
+        )
+    except httpx.HTTPError:
+        return None
+    if response.status_code == 200:
+        return True
+    if response.status_code in (301, 302, 303, 307, 308):
+        return False
+    return None
+
+
 async def _classify_video_types(
-    client: httpx.AsyncClient, api_key: str, video_ids: list[str]
+    client: httpx.AsyncClient, api_key: str, video_ids: list[str], strict_shorts: bool = False
 ) -> dict[str, str]:
     """Best-effort video/short/live classification via one batched
     videos.list call — `id` accepts up to 50 comma-separated ids for a
     single quota unit, regardless of how many parts are requested.
-    playlistItems (and RSS) alone don't expose duration or live status."""
+    playlistItems (and RSS) alone don't expose duration or live status.
+
+    When `strict_shorts` is on, any video that's short enough to *possibly*
+    be a Short (<=180s) also gets the extra `_is_actual_short` check —
+    costs no API quota, but one extra HTTP request per such video, which is
+    why it's opt-in and duration-gated rather than applied to everything."""
 
     if not video_ids:
         return {}
@@ -160,6 +190,13 @@ async def _classify_video_types(
             continue
         duration = item.get("contentDetails", {}).get("duration")
         seconds = _parse_duration_seconds(duration) if duration else 0
+
+        if strict_shorts and 0 < seconds <= _SHORTS_CANDIDATE_MAX_SECONDS:
+            is_short = await _is_actual_short(client, video_id)
+            if is_short is not None:
+                types[video_id] = "short" if is_short else "video"
+                continue
+
         types[video_id] = "short" if 0 < seconds <= _SHORT_MAX_SECONDS else "video"
     return types
 
@@ -219,6 +256,7 @@ async def list_uploads(
     uploads_playlist_id: str,
     page_token: str | None = None,
     max_results: int = 50,
+    strict_shorts: bool = False,
 ) -> Page:
     params = {"part": "snippet,contentDetails", "playlistId": uploads_playlist_id, "maxResults": max_results}
     if page_token:
@@ -241,7 +279,9 @@ async def list_uploads(
     # themselves. A genuine quota exhaustion (YoutubeQuotaExceeded) is left
     # to propagate as usual so key rotation still reacts to it.
     try:
-        types = await _classify_video_types(client, api_key, [item.video_id for item in items])
+        types = await _classify_video_types(
+            client, api_key, [item.video_id for item in items], strict_shorts=strict_shorts
+        )
     except YoutubeApiError:
         types = {}
     if types:

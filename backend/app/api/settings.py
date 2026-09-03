@@ -15,6 +15,7 @@ def _to_out(settings) -> SettingsOut:
         upload_fetch_method=settings.upload_fetch_method,
         backfill_days=settings.backfill_days,
         backfill_min_count=settings.backfill_min_count,
+        strict_shorts_detection=settings.strict_shorts_detection,
         youtube_connected=settings.youtube_refresh_token_encrypted is not None,
         youtube_channel_title=settings.youtube_channel_title,
     )
@@ -37,6 +38,8 @@ async def update_settings(body: SettingsUpdate, session: DbSession, scheduler: S
         settings.backfill_days = body.backfill_days
     if body.backfill_min_count is not None:
         settings.backfill_min_count = body.backfill_min_count
+    if body.strict_shorts_detection is not None:
+        settings.strict_shorts_detection = body.strict_shorts_detection
 
     # These two also drive the live APScheduler jobs — a value change here
     # reschedules the already-running job immediately rather than only

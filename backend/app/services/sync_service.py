@@ -105,7 +105,7 @@ async def _sync_channel_uploads(
 
     if method == "api":
         try:
-            await _sync_channel_uploads_via_api(session, http_client, channel)
+            await _sync_channel_uploads_via_api(session, http_client, channel, settings)
         except key_pool.QuotaExhaustedError:
             fell_back = True
             await _sync_channel_uploads_via_rss(session, http_client, channel)
@@ -118,12 +118,14 @@ async def _sync_channel_uploads(
 
 
 async def _sync_channel_uploads_via_api(
-    session: AsyncSession, http_client: httpx.AsyncClient, channel: Channel
+    session: AsyncSession, http_client: httpx.AsyncClient, channel: Channel, settings: AppSettings
 ) -> None:
     playlist_id = youtube_client.uploads_playlist_id_for_channel(channel.youtube_channel_id)
 
     async def _call(api_key: str) -> youtube_client.Page:
-        return await youtube_client.list_uploads(http_client, api_key, playlist_id)
+        return await youtube_client.list_uploads(
+            http_client, api_key, playlist_id, strict_shorts=settings.strict_shorts_detection
+        )
 
     page = await key_pool.call_with_key_rotation(session, "background", _call)
     # The uploads playlist is newest-first: stop as soon as a page yields no

@@ -41,6 +41,15 @@ class AppSettings(Base):
     backfill_days: Mapped[int] = mapped_column(Integer, default=365)
     backfill_min_count: Mapped[int] = mapped_column(Integer, default=50)
 
+    # Off by default: when on, any upload of 3 minutes or less gets an extra,
+    # unofficial check (app.services.youtube_client._is_actual_short) to
+    # tell an actual Short from a merely-short video by aspect ratio, since
+    # the Data API doesn't expose that for videos you don't own. Costs no
+    # API quota (it's a plain web request, not a Data API call) but adds one
+    # extra HTTP request per candidate video and relies on undocumented
+    # YouTube redirect behavior — see PROJECT_OUTLINE.md.
+    strict_shorts_detection: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Seeded from Config.sync_interval_minutes / .backfill_worker_interval_seconds
     # on first boot, then editable from Settings — see app.scheduler for how a
     # change here live-reschedules the running APScheduler jobs.
