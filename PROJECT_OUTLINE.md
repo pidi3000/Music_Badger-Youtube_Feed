@@ -29,13 +29,18 @@ architecture decisions for the rebuild before any code is written.
 | App auth token | Signed httpOnly session cookie set on login with the shared secret. |
 | Sync history | A `SyncLog` table ships in v1 (not deferred). |
 | Multiple YouTube API keys | Supported — a pool of API keys managed in the SPA Settings UI, stored encrypted in the DB. Used to spread quota for public Data API calls (channel resolution, uploads via API, video details). |
-| Key rotation | Use one key until it's quota-exhausted, then move to the next active key in the pool. |
+| Key groups | Each key belongs to one of two groups, set per-key in Settings: **background** (scheduled sync, manual "Sync Now", backfill queue) or **active** (interactive, user-initiated single lookups, e.g. resolving a channel when manually adding it). |
+| Group isolation | Strict — a group never borrows keys from the other, even if its own group is fully exhausted and the other has spare quota. |
+| Manual "Sync Now" pool | Uses the **background** group, same as scheduled sync — it's the same bulk operation, just triggered early. |
+| Key rotation (within a group) | Use one key until it's quota-exhausted, then move to the next active key in that group. |
 | Upload fetch method | Two methods per channel: **API** (YouTube Data API, full history, richer metadata, uses quota) or **HTTP/RSS** (public `feeds/videos.xml` feed, no key/quota needed, ~15 most recent uploads only, less metadata). Global default + per-channel override. |
 | Quota-exhaustion fallback | If a channel is set to `API` but every key in the pool is exhausted, the sync temporarily falls back to `RSS` for that channel and logs/flags that a fallback occurred (surfaced via `SyncLog` / a UI indicator), rather than skipping the channel. |
 | Upload caching | All fetched uploads are cached in the DB so they never need to be re-fetched. See §7. |
 | Cache pruning | None — once an upload is cached it's kept forever. The 1yr/min-50 rule only governs how far back to *backfill* when a channel is first synced, not later deletion. |
 | Retention thresholds | Configurable in Settings (defaults: 1 year back, minimum 50 uploads). |
 | RSS backfill | A channel first fetched (or switched) to `rss` gets a one-time `api` backfill to the retention threshold first (if a key is available), then continues on `rss` for ongoing syncs. |
+| Backfill execution | Queued, not synchronous — each channel's backfill is a resumable `BackfillTask` (see §7) processed in the background, so a quota outage pauses and resumes it rather than losing progress or blocking anything. |
+| Backfill progress UI | The SPA has a dedicated progress view showing every channel's backfill status (queued/in progress/paused/completed), a progress indicator, and why it's paused (e.g. "quota exhausted, resumes ~4h"). |
 
 ## 3. High-level architecture
 
@@ -80,9 +85,17 @@ built React static files itself.
 - **Upload** — `id`, `channel_id`, `youtube_video_id`, `title`, `published_at`,
   `thumbnail_url`, fetched/cached metadata, `fetched_via` (`api` | `rss`, for
   transparency about how each row's data was sourced)
-- **ApiKey** — `id`, `label`, `key_value` (encrypted at rest), `status`
-  (`active` | `exhausted` | `disabled`), `quota_resets_at` (nullable),
-  `last_used_at`, `created_at`
+- **ApiKey** — `id`, `label`, `key_value` (encrypted at rest), `group`
+  (`background` | `active`), `status` (`active` | `exhausted` |
+  `disabled`), `quota_resets_at` (nullable), `last_used_at`, `created_at`
+- **BackfillTask** — `id`, `channel_id`, `status` (`queued` |
+  `in_progress` | `paused_quota` | `completed` | `failed`),
+  `target_min_count`, `target_after` (date cutoff, snapshotted from
+  Settings when the task is created so a later Settings change doesn't
+  retroactively alter an in-flight task), `fetched_count`, `resume_cursor`
+  (opaque pagination token / oldest-fetched timestamp, so work resumes
+  exactly where it left off), `attempts`, `last_error`, `created_at`,
+  `started_at`, `completed_at`, `updated_at`
 - **SyncLog** — `id`, `started_at`, `finished_at`, `status`,
   `channels_added`, `channels_marked_unsubscribed`, `rss_fallback_channels`
   (list/count of channels that fell back to RSS due to key exhaustion),
@@ -121,13 +134,13 @@ The user is informed via:
 - Manually-added channels (`source = manual`, not from subscriptions) are
   unaffected by this logic entirely.
 
-## 6. Upload fetch methods: API key pool & RSS fallback
+## 6. Upload fetch methods: API key groups & RSS fallback
 
 Two independent ways to get a channel's uploads:
 
 - **API**: YouTube Data API (`playlistItems`/`search`), using a key from the
-  API-key pool. Supports full upload history and richer metadata (view
-  counts, duration, etc.), but consumes quota.
+  relevant group's pool. Supports full upload history and richer metadata
+  (view counts, duration, etc.), but consumes quota.
 - **RSS/HTTP**: the public, keyless feed at
   `https://www.youtube.com/feeds/videos.xml?channel_id={id}` (already
   referenced in v2, see `music_feed/db_models/_channel.py`). No quota cost
@@ -138,40 +151,57 @@ Two independent ways to get a channel's uploads:
 each `Channel.upload_fetch_method` can override it. The SPA exposes both —
 a global setting and a per-channel toggle.
 
-**API key pool**:
-- Multiple keys can be added, labeled, and removed from the SPA Settings
-  UI; stored encrypted in the DB (`ApiKey`).
-- One key is used for all API calls until it returns a quota-exceeded
-  error, at which point it's marked `exhausted` (with an estimated
-  `quota_resets_at`, YouTube quota resets daily at midnight Pacific Time)
-  and the next `active` key in the pool takes over.
-- The Settings UI shows each key's status (active/exhausted) and reset
-  ETA.
-- Note: this pooling only multiplies quota for calls that can run on a
+**API key pools — two groups, strictly isolated**:
+- Every key (`ApiKey`) is assigned a `group`: **background** or **active**,
+  editable per-key in the Settings UI alongside label/status.
+- **background** group: used by the scheduled sync, a manually-triggered
+  "Sync Now", and all `BackfillTask` processing (§7) — i.e. everything the
+  app does on its own initiative or in bulk.
+- **active** group: used only by immediate, interactive, single-item calls
+  triggered directly by a user action in the SPA — chiefly resolving a
+  channel (from video link / ID / handle) during manual channel add. This
+  keeps that interaction fast even if a large backfill or sync has burned
+  through the entire background pool.
+- Within each group: one key is used for all calls until it returns a
+  quota-exceeded error, at which point it's marked `exhausted` (with an
+  estimated `quota_resets_at`, YouTube quota resets daily at midnight
+  Pacific Time) and the next `active`-status key *in the same group* takes
+  over.
+- **No cross-group borrowing**: if a group's keys are all exhausted, calls
+  in that group do not fall back to the other group's keys. Background
+  work falls back to RSS (below) or pauses/queues (§7); an active-group
+  call (e.g. manual add) simply fails with a clear "quota exhausted, try
+  again later or add another active-use key" error — it never silently
+  eats into the background pool.
+- The Settings UI shows each key's group, status (active/exhausted), and
+  reset ETA.
+- Note: key pooling only multiplies quota for calls that can run on a
   plain API key (channel resolution, uploads via API, video details).
   Importing the subscription list itself (`subscriptions.list`) requires
   the user's OAuth token and draws from whichever Google Cloud project the
-  OAuth client belongs to — the key pool does not extend that particular
-  quota.
+  OAuth client belongs to — no key pool extends that particular quota.
 
-**Exhaustion fallback**: if a channel is configured for `api` and every key
-in the pool is `exhausted`, the sync job automatically uses `rss` for that
-channel for the current cycle instead of skipping it, and records the
-fallback on the `SyncLog` entry (and/or a per-channel "fetched via RSS due
-to quota" indicator) so it's visible rather than silent. Once a key becomes
-`active` again, subsequent syncs for that channel go back to `api`
-(assuming no per-channel override to `rss`).
+**Exhaustion fallback (ongoing sync, not backfill)**: if a channel is
+configured for `api` and every key in the **background** group is
+exhausted, the sync job automatically uses `rss` for that channel's
+incremental "what's new" fetch for the current cycle instead of skipping
+it, and records the fallback on the `SyncLog` entry (and/or a per-channel
+"fetched via RSS due to quota" indicator) so it's visible rather than
+silent. Once a background key becomes `active` again, subsequent syncs for
+that channel go back to `api` (assuming no per-channel override to `rss`).
+This fallback does not apply to `BackfillTask` processing — RSS can't
+satisfy a backfill target, so a backfill task pauses instead (§7).
 
-## 7. Upload caching & backfill policy
+## 7. Upload caching, backfill queue & progress UI
 
 Every upload fetched (via API or RSS) is persisted to the `Upload` table
 permanently — the feed and channel pages always read from the DB, never
 re-fetch from YouTube just to display data. YouTube is only queried by the
-sync job to pick up *new* uploads and, once, to backfill history.
+sync job to pick up *new* uploads and, via the backfill queue, to fill in
+history.
 
-**Backfill target** (applies once per channel, the first time it's synced,
-tracked by `Channel.backfill_completed_at`): fetch uploads until **both**
-of the following are satisfied, whichever requires going further back:
+**Backfill target** (per channel): fetch uploads until **both** of the
+following are satisfied, whichever requires going further back:
 - at least `backfill_min_count` uploads are cached (default: 50), **and**
 - all uploads published within the last `backfill_days` are cached
   (default: 365 days).
@@ -180,21 +210,53 @@ In other words: go back ~1 year, but if a channel has fewer than 50 uploads
 in that window, keep paging further back until 50 are cached (or the
 channel's entire history is exhausted, if it has fewer than 50 uploads
 ever). Both thresholds are editable in Settings (`backfill_days`,
-`backfill_min_count`).
+`backfill_min_count`) and are snapshotted onto each `BackfillTask` when
+created.
+
+**Backfill is a queue, not a synchronous step**:
+- A `BackfillTask` (queued) is created whenever a channel needs backfilling:
+  on first add (subscription import or manual add), or when a channel's
+  `upload_fetch_method` is switched to `rss` and it hasn't been backfilled
+  yet.
+- A background worker (driven by the same in-process scheduler as the sync
+  job, ticking independently and more frequently, e.g. every minute) picks
+  up `queued`/`paused_quota` tasks and processes them a page at a time
+  using a key from the **background** group (§6), persisting
+  `resume_cursor` and `fetched_count` after every page — so progress is
+  never lost even if the process restarts.
+- If every background-group key is exhausted mid-task, the task moves to
+  `paused_quota` (keeping its cursor) instead of failing or restarting from
+  scratch, and the worker moves on to other tasks / stops for this tick.
+  It's automatically retried on a later tick — no manual resume needed —
+  and picks up exactly where it left off via `resume_cursor`.
+- Once the target is met, the task is marked `completed` and
+  `Channel.backfill_completed_at` is set.
+- Multiple tasks can be queued at once (e.g. right after importing a large
+  subscription list); the worker works through them one at a time (or a
+  small number concurrently — an implementation detail, not user-facing).
+
+**Progress UI**: the SPA has a dedicated view (e.g. under Settings or its
+own "Sync" page) listing every non-completed `BackfillTask`:
+- Per-channel row: channel name/thumbnail, status badge (Queued / In
+  progress / Paused — quota exhausted, resumes ~4h / Failed), and a
+  progress indicator (`fetched_count` vs `target_min_count`, plus how far
+  back it has reached relative to `target_after`).
+- A summary banner while any tasks are active, e.g. "Backfilling 12
+  channels — 3 in progress, 5 queued, 4 paused (quota exhausted)".
+- The SPA polls the relevant endpoint (§8) on an interval while tasks are
+  active, rather than a persistent connection — simplest given the
+  single-container, no-extra-infra deployment (§2).
 
 **Method used for backfill**:
-- `api`-configured channels: paginate `playlistItems`/`search` directly
-  until the target is met.
+- `api`-configured channels: the task pages through
+  `playlistItems`/`search` directly until the target is met.
 - `rss`-configured channels: the RSS feed only returns ~15 items, so it
-  can't satisfy the backfill target on its own. A channel first synced (or
-  switched) to `rss` gets a **one-time API backfill** to the target
-  (consuming a key from the pool, if one is available) before switching to
-  `rss` for all subsequent syncs. If no key is available at that moment,
-  the channel starts with whatever RSS returns and the backfill is retried
-  on a later sync once a key is active again — `backfill_completed_at`
-  stays null until the full target is actually met.
+  can't satisfy the backfill target on its own — these channels' backfill
+  tasks always run via the API (background group) regardless of the
+  channel's regular fetch method, then the channel switches to `rss` for
+  its ongoing incremental syncs once `backfill_completed_at` is set.
 
-**Ongoing syncs** (after backfill) only fetch what's new since
+**Ongoing syncs** (after backfill completes) only fetch what's new since
 `last_synced_at` (via API) or whatever the RSS feed currently returns —
 already-cached uploads are never re-fetched. Nothing is ever pruned: once
 cached, an upload stays in the DB regardless of how old it gets or how
@@ -225,12 +287,15 @@ GET    /api/feed                    # uploads, filterable by tag(s)
 GET    /api/settings                # incl. upload_fetch_method, backfill_days, backfill_min_count
 PATCH  /api/settings
 
-GET    /api/api-keys                # list keys + status (active/exhausted, reset ETA)
-POST   /api/api-keys                # add a key
-PATCH  /api/api-keys/{id}           # relabel / disable
+GET    /api/api-keys                # list keys + group + status (active/exhausted, reset ETA)
+POST   /api/api-keys                # add a key (incl. group: background|active)
+PATCH  /api/api-keys/{id}           # relabel / disable / change group
 DELETE /api/api-keys/{id}
 
-POST   /api/sync                    # trigger sync now
+GET    /api/backfill-tasks          # list tasks (filterable by status), for the progress UI
+POST   /api/backfill-tasks/{id}/retry   # manually re-queue a failed task
+
+POST   /api/sync                    # trigger sync now (background group)
 GET    /api/sync/status             # last run, next run, in-progress
 ```
 
@@ -238,10 +303,10 @@ GET    /api/sync/status             # last run, next run, in-progress
 
 All previously open implementation details have been decided (see the table
 in §2 for the sync interval, quota strategy, deployment topology, auth
-token mechanism, sync logging, API key pooling, the API/RSS fetch method,
-and the upload caching/backfill policy). Nothing here is blocking
-implementation anymore; SyncLog, ApiKey, and the backfill fields are
-included in the data model (§4) as part of v1.
+token mechanism, sync logging, API key groups, the API/RSS fetch method,
+and the upload caching/backfill queue). Nothing here is blocking
+implementation anymore; SyncLog, ApiKey (with `group`), and BackfillTask
+are included in the data model (§4) as part of v1.
 
 ## 10. Out of scope for this rebuild (unless requested later)
 
@@ -251,8 +316,9 @@ included in the data model (§4) as part of v1.
 
 ## 11. Tech stack summary
 
-- **Backend**: FastAPI, SQLAlchemy 2.0 (async), Alembic, APScheduler,
-  Pydantic v2, `httpx` (RSS fetching + general HTTP) /
+- **Backend**: FastAPI, SQLAlchemy 2.0 (async), Alembic, APScheduler
+  (sync schedule + backfill-queue worker tick, both in-process — no
+  Celery/Redis), Pydantic v2, `httpx` (RSS fetching + general HTTP) /
   `google-api-python-client` for YouTube Data API calls.
 - **Frontend**: React + TypeScript, Vite, a fetch/query layer (e.g.
   TanStack Query) for API calls.
