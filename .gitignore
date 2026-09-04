@@ -4,7 +4,10 @@
 *.db
 flask_session/
 data_dev/
-data/*
+# Not just top-level /data/ — backend/data/ (SQLite db + its WAL/SHM
+# sidecar files, downloaded avatar media) is where the app actually
+# writes at runtime.
+**/data/*
 client_secret_youtube.json
 
 # Node / frontend
