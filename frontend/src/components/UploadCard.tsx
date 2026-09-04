@@ -1,6 +1,6 @@
 import { Upload } from '../api/feed';
 import { youtubeChannelUrl } from '../utils/youtube';
-import { formatDate } from '../utils/dates';
+import { formatDateTime } from '../utils/dates';
 import ChannelAvatar from './ChannelAvatar';
 import '../styles/upload-card.css';
 
@@ -17,7 +17,7 @@ const VIDEO_TYPE_LABELS: Record<Upload['video_type'], string> = {
 export default function UploadCard({ upload }: UploadCardProps) {
   const videoUrl = `https://www.youtube.com/watch?v=${upload.youtube_video_id}`;
   const channelUrl = youtubeChannelUrl(upload.channel);
-  const publishedDate = formatDate(upload.published_at);
+  const publishedAt = formatDateTime(upload.published_at);
 
   const handleClick = () => {
     window.open(videoUrl, '_blank');
@@ -48,7 +48,7 @@ export default function UploadCard({ upload }: UploadCardProps) {
           <span>{upload.channel.title}</span>
         </a>
         <div className="meta">
-          <span className="date">{publishedDate}</span>
+          <span className="date">{publishedAt}</span>
           {upload.fetched_via === 'rss' && <span className="badge">RSS</span>}
         </div>
       </div>
