@@ -199,6 +199,31 @@ class BackfillTask(Base):
     channel: Mapped["Channel"] = relationship(back_populates="backfill_tasks")
 
 
+class ChannelSyncJob(Base):
+    """Latest per-channel incremental upload sync attempt (API or RSS) —
+    bounded to one row per channel (upserted on each attempt, not a full
+    history log) so the Jobs page can show live status without unbounded
+    growth. See app.services.job_service and api.jobs."""
+
+    __tablename__ = "channel_sync_jobs"
+    __table_args__ = (UniqueConstraint("channel_id", name="uq_channel_sync_job_channel"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id", ondelete="CASCADE"), index=True)
+
+    # "api" | "rss" — which method this attempt used.
+    method: Mapped[str] = mapped_column(String(8))
+    # "running" | "success" | "error"
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    new_uploads_count: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    channel: Mapped["Channel"] = relationship()
+
+
 class SyncLog(Base):
     __tablename__ = "sync_logs"
 

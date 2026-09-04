@@ -6,9 +6,10 @@ interface AddChannelModalProps {
   onClose: () => void;
   onSubmit: (channelLink: string, tagIds: number[], fetchMethod: 'api' | 'rss' | null) => void;
   tags: Tag[];
+  globalDefaultFetchMethod?: 'api' | 'rss';
 }
 
-export default function AddChannelModal({ onClose, onSubmit, tags }: AddChannelModalProps) {
+export default function AddChannelModal({ onClose, onSubmit, tags, globalDefaultFetchMethod }: AddChannelModalProps) {
   const [channelLink, setChannelLink] = useState('');
   const [selectedTags, setSelectedTags] = useState<number[]>([]);
   const [fetchMethod, setFetchMethod] = useState<'api' | 'rss' | null>(null);
@@ -71,7 +72,9 @@ export default function AddChannelModal({ onClose, onSubmit, tags }: AddChannelM
               value={fetchMethod ?? 'default'}
               onChange={(e) => setFetchMethod(e.target.value === 'default' ? null : (e.target.value as 'api' | 'rss'))}
             >
-              <option value="default">Use global default</option>
+              <option value="default">
+                Use global default{globalDefaultFetchMethod ? ` (currently ${globalDefaultFetchMethod.toUpperCase()})` : ''}
+              </option>
               <option value="api">API</option>
               <option value="rss">RSS</option>
             </select>

@@ -39,6 +39,7 @@ async def list_channels(
     source: Literal["manual", "subscription"] | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     fetch_method: str | None = None,
+    search: str | None = None,
     sort: ChannelSortField = "name",
     order: Literal["asc", "desc"] = "asc",
 ):
@@ -56,6 +57,8 @@ async def list_channels(
         query = query.where(Channel.subscription_status == status_filter)
     if fetch_method is not None:
         query = query.where(Channel.upload_fetch_method == fetch_method)
+    if search:
+        query = query.where(Channel.title.ilike(f"%{search}%"))
 
     result = await session.execute(query)
     channels = list(result.unique().scalars())

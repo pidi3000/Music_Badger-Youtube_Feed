@@ -38,7 +38,7 @@ export default function Layout() {
           <li><Link to="/channels">Channels</Link></li>
           <li><Link to="/tags">Tags</Link></li>
           <li><Link to="/settings">Settings</Link></li>
-          <li><Link to="/backfill">Backfill</Link></li>
+          <li><Link to="/jobs">Jobs</Link></li>
         </ul>
         {statusData?.unacknowledged_unsubscribed_count ? (
           <div className="unsubscribe-banner">

@@ -1,8 +1,15 @@
-.backfill-page {
+.jobs-page {
   max-width: 1000px;
 }
 
-.backfill-summary {
+.jobs-subtitle {
+  color: var(--text-light);
+  margin-top: -20px;
+  margin-bottom: 25px;
+  font-size: 14px;
+}
+
+.jobs-summary {
   display: flex;
   gap: 15px;
   padding: 15px;
@@ -14,7 +21,7 @@
   color: var(--badge-info-text);
 }
 
-.backfill-list {
+.jobs-list {
   display: flex;
   flex-direction: column;
   gap: 15px;

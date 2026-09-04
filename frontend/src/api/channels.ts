@@ -39,6 +39,7 @@ export interface GetChannelsQuery {
   source?: 'manual' | 'subscription';
   status?: 'subscribed' | 'unsubscribed';
   fetch_method?: 'api' | 'rss';
+  search?: string;
   sort?: ChannelSort;
   order?: 'asc' | 'desc';
 }
@@ -50,6 +51,7 @@ export async function getChannels(query?: GetChannelsQuery): Promise<Channel[]> 
   if (query?.source) params.append('source', query.source);
   if (query?.status) params.append('status', query.status);
   if (query?.fetch_method) params.append('fetch_method', query.fetch_method);
+  if (query?.search) params.append('search', query.search);
   if (query?.sort) params.append('sort', query.sort);
   if (query?.order) params.append('order', query.order);
 

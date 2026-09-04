@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   useChannels,
   useCreateChannel,
@@ -9,6 +9,7 @@ import {
   ChannelSort,
 } from '../api/channels';
 import { useTags } from '../api/tags';
+import { useSettings } from '../api/settings';
 import { useToast } from '../context/ToastContext';
 import { getErrorMessage } from '../utils/errors';
 import ChannelRow from '../components/ChannelRow';
@@ -32,12 +33,28 @@ export default function ChannelsPage() {
   const [source, setSource] = useState<'manual' | 'subscription' | undefined>(undefined);
   const [sort, setSort] = useState<ChannelSort>('name');
   const [order, setOrder] = useState<'asc' | 'desc'>('asc');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+
+  // Debounce so typing a channel name doesn't fire a request per keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   const tagId = tagFilterValue.startsWith('tag:') ? Number(tagFilterValue.slice(4)) : undefined;
   const untagged = tagFilterValue === 'untagged';
 
-  const { data: channelsData, isLoading } = useChannels({ tag_id: tagId, untagged, source, sort, order });
+  const { data: channelsData, isLoading } = useChannels({
+    tag_id: tagId,
+    untagged,
+    source,
+    search: search || undefined,
+    sort,
+    order,
+  });
   const { data: tagsData } = useTags();
+  const { data: settingsData } = useSettings();
 
   const channels = channelsData as Channel[] | undefined;
   const createChannelMutation = useCreateChannel();
@@ -76,13 +93,18 @@ export default function ChannelsPage() {
     }
   };
 
-  const handleUpdateChannel = async (id: number, tagIds: number[], fetchMethod: string | null) => {
+  const handleUpdateChannel = async (id: number, tagIds: number[], fetchMethod: string | null | undefined) => {
     try {
       await updateChannelMutation.mutateAsync({
         id,
         payload: {
           tag_ids: tagIds,
-          upload_fetch_method: (fetchMethod === 'null' ? null : fetchMethod) as 'api' | 'rss' | null,
+          // undefined = the user never touched the fetch-method select,
+          // so it's omitted from the request entirely rather than
+          // resubmitting whatever it happened to display — see ChannelRow.
+          ...(fetchMethod !== undefined && {
+            upload_fetch_method: (fetchMethod === 'null' ? null : fetchMethod) as 'api' | 'rss' | null,
+          }),
         },
       });
     } catch (err) {
@@ -108,10 +130,23 @@ export default function ChannelsPage() {
       </div>
 
       {showAddModal && (
-        <AddChannelModal onClose={() => setShowAddModal(false)} onSubmit={handleAddChannel} tags={tagsData || []} />
+        <AddChannelModal
+          onClose={() => setShowAddModal(false)}
+          onSubmit={handleAddChannel}
+          tags={tagsData || []}
+          globalDefaultFetchMethod={settingsData?.upload_fetch_method}
+        />
       )}
 
       <div className="channels-filter-bar">
+        <input
+          type="search"
+          className="channels-search"
+          placeholder="Search channels..."
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+        />
+
         <select value={tagFilterValue} onChange={(e) => setTagFilterValue(e.target.value as TagFilterValue)}>
           <option value="all">All tags</option>
           <option value="untagged">Untagged</option>

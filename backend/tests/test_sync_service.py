@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from app.encryption import encrypt
-from app.models import ApiKey, AppSettings, Channel, SyncLog
+from app.models import ApiKey, AppSettings, Channel, ChannelSyncJob, SyncLog
 from app.services import avatar_store, key_pool, oauth, rss, sync_service, youtube_client
 from app.services.settings_service import get_or_create_settings
 
@@ -64,6 +64,63 @@ async def test_import_subscriptions_adds_new_and_marks_unsubscribed(db_session, 
     assert by_id["UCccc"].unsubscribed_at is not None
     assert "UCddd" in by_id
     assert by_id["UCddd"].source == "subscription"
+
+
+@pytest.mark.asyncio
+async def test_import_subscriptions_commits_per_page_so_progress_is_visible_immediately(
+    db_session, db_session_factory, monkeypatch
+):
+    settings = await get_or_create_settings(db_session)
+    settings.youtube_refresh_token_encrypted = encrypt("fake-refresh-token")
+    await db_session.commit()
+
+    monkeypatch.setattr(oauth, "refresh_access_token", fake_refresh_access_token)
+
+    pages = [
+        youtube_client.Page(
+            items=[youtube_client.SubscriptionEntry(channel_id="UCpage1", title="Page1 Chan", thumbnail_url=None)],
+            next_page_token="page2",
+        ),
+        youtube_client.Page(
+            items=[youtube_client.SubscriptionEntry(channel_id="UCpage2", title="Page2 Chan", thumbnail_url=None)],
+            next_page_token=None,
+        ),
+    ]
+    call_count = 0
+    visible_after_page_1 = None
+
+    async def fake_list_my_subscriptions(client, access_token, page_token=None):
+        nonlocal call_count, visible_after_page_1
+        if call_count == 1:
+            # By the time page 2 is being fetched, page 1's channel must
+            # already be committed and visible on an independent
+            # connection — not just held in this session's own
+            # uncommitted transaction.
+            async with db_session_factory() as other_session:
+                result = await other_session.execute(
+                    select(Channel).where(Channel.youtube_channel_id == "UCpage1")
+                )
+                visible_after_page_1 = result.scalar_one_or_none() is not None
+        page = pages[call_count]
+        call_count += 1
+        return page
+
+    monkeypatch.setattr(youtube_client, "list_my_subscriptions", fake_list_my_subscriptions)
+
+    async def fake_fetch_uploads_feed(client, youtube_channel_id):
+        return []
+
+    monkeypatch.setattr(rss, "fetch_uploads_feed", fake_fetch_uploads_feed)
+
+    log = SyncLog(status="running")
+    db_session.add(log)
+    await db_session.flush()
+
+    await sync_service.run_sync(db_session, http_client=None, log=log)
+
+    assert visible_after_page_1 is True
+    await db_session.refresh(log)
+    assert log.channels_added == 2
 
 
 @pytest.mark.asyncio
@@ -204,6 +261,79 @@ async def test_sync_channel_uploads_via_api_passes_strict_shorts_setting(db_sess
     await sync_service._sync_channel_uploads_via_api(db_session, http_client=None, channel=chan, settings=settings)
 
     assert captured["strict_shorts"] is True
+
+
+@pytest.mark.asyncio
+async def test_sync_channel_uploads_via_api_records_a_successful_job(db_session, monkeypatch):
+    chan = Channel(youtube_channel_id="UCjob1", title="Job Chan", source="manual")
+    db_session.add(chan)
+    db_session.add(ApiKey(label="bg-1", group="background", key_value_encrypted=encrypt("k")))
+    await db_session.commit()
+
+    settings = AppSettings(access_secret_hash="x", upload_fetch_method="api")
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        return youtube_client.Page(
+            items=[
+                youtube_client.PlaylistItem(video_id="v1", title="t", published_at=datetime.utcnow(), thumbnail_url=None)
+            ],
+            next_page_token=None,
+        )
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    new_count = await sync_service._sync_channel_uploads_via_api(
+        db_session, http_client=None, channel=chan, settings=settings
+    )
+    assert new_count == 1
+
+    result = await db_session.execute(select(ChannelSyncJob).where(ChannelSyncJob.channel_id == chan.id))
+    job = result.scalar_one()
+    assert job.method == "api"
+    assert job.status == "success"
+    assert job.new_uploads_count == 1
+    assert job.error is None
+    assert job.finished_at is not None
+
+
+@pytest.mark.asyncio
+async def test_sync_channel_uploads_via_rss_records_a_failed_job(db_session, monkeypatch):
+    chan = Channel(youtube_channel_id="UCjob2", title="Job Chan RSS", source="manual")
+    db_session.add(chan)
+    await db_session.commit()
+
+    async def fake_fetch_uploads_feed(client, youtube_channel_id):
+        raise RuntimeError("feed unreachable")
+
+    monkeypatch.setattr(rss, "fetch_uploads_feed", fake_fetch_uploads_feed)
+
+    with pytest.raises(RuntimeError):
+        await sync_service._sync_channel_uploads_via_rss(db_session, http_client=None, channel=chan)
+
+    result = await db_session.execute(select(ChannelSyncJob).where(ChannelSyncJob.channel_id == chan.id))
+    job = result.scalar_one()
+    assert job.method == "rss"
+    assert job.status == "error"
+    assert job.error == "feed unreachable"
+
+
+@pytest.mark.asyncio
+async def test_channel_sync_job_is_upserted_not_duplicated_across_attempts(db_session, monkeypatch):
+    chan = Channel(youtube_channel_id="UCjob3", title="Job Chan Upsert", source="manual")
+    db_session.add(chan)
+    await db_session.commit()
+
+    async def fake_fetch_uploads_feed(client, youtube_channel_id):
+        return []
+
+    monkeypatch.setattr(rss, "fetch_uploads_feed", fake_fetch_uploads_feed)
+
+    await sync_service._sync_channel_uploads_via_rss(db_session, http_client=None, channel=chan)
+    await sync_service._sync_channel_uploads_via_rss(db_session, http_client=None, channel=chan)
+
+    result = await db_session.execute(select(ChannelSyncJob).where(ChannelSyncJob.channel_id == chan.id))
+    jobs = list(result.scalars())
+    assert len(jobs) == 1
 
 
 @pytest.mark.asyncio

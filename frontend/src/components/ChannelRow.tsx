@@ -10,7 +10,7 @@ interface ChannelRowProps {
   channel: Channel;
   allTags: Tag[];
   onDelete: () => void;
-  onUpdate: (id: number, tagIds: number[], fetchMethod: string | null) => void;
+  onUpdate: (id: number, tagIds: number[], fetchMethod: string | null | undefined) => void;
   onAckUnsubscribe: (id: number) => void;
 }
 
@@ -41,9 +41,15 @@ export default function ChannelRow({ channel, allTags, onDelete, onUpdate, onAck
   const [showEdit, setShowEdit] = useState(false);
   const [selectedTags, setSelectedTags] = useState<number[]>(channel.tags.map((t) => t.id));
   const [fetchMethod, setFetchMethod] = useState<string | null>(channel.upload_fetch_method);
+  // Only true once the user actually touches the select — otherwise we'd
+  // resubmit upload_fetch_method on every save (e.g. one that only meant
+  // to change tags), which is harmless today but risks accidentally
+  // pinning a "use default" channel to an explicit override later.
+  const [fetchMethodTouched, setFetchMethodTouched] = useState(false);
 
   const handleSave = () => {
-    onUpdate(channel.id, selectedTags, fetchMethod);
+    onUpdate(channel.id, selectedTags, fetchMethodTouched ? fetchMethod : undefined);
+    setFetchMethodTouched(false);
     setShowEdit(false);
   };
 
@@ -106,8 +112,14 @@ export default function ChannelRow({ channel, allTags, onDelete, onUpdate, onAck
                 </label>
               ))}
             </div>
-            <select value={fetchMethod || 'null'} onChange={(e) => setFetchMethod(e.target.value === 'null' ? null : (e.target.value as 'api' | 'rss'))}>
-              <option value="null">Use default</option>
+            <select
+              value={fetchMethod || 'null'}
+              onChange={(e) => {
+                setFetchMethodTouched(true);
+                setFetchMethod(e.target.value === 'null' ? null : (e.target.value as 'api' | 'rss'));
+              }}
+            >
+              <option value="null">Use default (currently {channel.effective_fetch_method.toUpperCase()})</option>
               <option value="api">API</option>
               <option value="rss">RSS</option>
             </select>
@@ -119,7 +131,16 @@ export default function ChannelRow({ channel, allTags, onDelete, onUpdate, onAck
         {showEdit ? (
           <>
             <button onClick={handleSave}>Save</button>
-            <button onClick={() => setShowEdit(false)}>Cancel</button>
+            <button
+              onClick={() => {
+                setSelectedTags(channel.tags.map((t) => t.id));
+                setFetchMethod(channel.upload_fetch_method);
+                setFetchMethodTouched(false);
+                setShowEdit(false);
+              }}
+            >
+              Cancel
+            </button>
           </>
         ) : (
           <>

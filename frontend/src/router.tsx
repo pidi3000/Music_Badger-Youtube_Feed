@@ -4,7 +4,7 @@ import FeedPage from './pages/FeedPage';
 import ChannelsPage from './pages/ChannelsPage';
 import TagsPage from './pages/TagsPage';
 import SettingsPage from './pages/SettingsPage';
-import BackfillPage from './pages/BackfillPage';
+import JobsPage from './pages/JobsPage';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 
@@ -38,8 +38,8 @@ export const router = createBrowserRouter([
         element: <SettingsPage />,
       },
       {
-        path: 'backfill',
-        element: <BackfillPage />,
+        path: 'jobs',
+        element: <JobsPage />,
       },
     ],
   },

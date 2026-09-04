@@ -33,6 +33,14 @@
   margin-bottom: 20px;
 }
 
+.channels-search {
+  padding: 8px 12px;
+  font-size: 14px;
+  min-width: 220px;
+  flex: 1;
+  max-width: 320px;
+}
+
 .channels-filter-bar select {
   padding: 8px 12px;
   font-size: 14px;
@@ -77,5 +85,9 @@
   .channels-filter-bar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .channels-search {
+    max-width: none;
   }
 }

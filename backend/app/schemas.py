@@ -211,3 +211,24 @@ class SyncStatusOut(BaseModel):
     is_running: bool
     next_scheduled_at: datetime | None
     unacknowledged_unsubscribed_count: int
+
+
+# ------------------------------------------------------------------ jobs --
+JobKind = Literal["backfill", "sync_api", "sync_rss", "import_subscriptions"]
+
+
+class JobOut(BaseModel):
+    id: str
+    kind: JobKind
+    channel: ChannelRef | None
+    status: str
+    detail: str | None
+    error: str | None
+    started_at: datetime
+    finished_at: datetime | None
+    # Only set for kind="backfill", for the progress bar.
+    fetched_count: int | None = None
+    target_min_count: int | None = None
+    # Only set for kind="backfill" — the id to POST to
+    # /api/backfill-tasks/{id}/retry.
+    backfill_task_id: int | None = None

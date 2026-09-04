@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.encryption import decrypt
 from app.models import AppSettings, Channel, SyncLog
-from app.services import avatar_store, key_pool, oauth, rss, youtube_client
+from app.services import avatar_store, job_service, key_pool, oauth, rss, youtube_client
 from app.services.backfill_service import enqueue_backfill_task
 from app.services.settings_service import get_or_create_settings
 from app.services.upload_store import upsert_uploads
@@ -32,47 +32,63 @@ async def _get_access_token(http_client: httpx.AsyncClient, settings: AppSetting
 
 
 async def _import_subscriptions(
-    session: AsyncSession, http_client: httpx.AsyncClient, access_token: str, settings: AppSettings
-) -> tuple[int, int]:
-    """Returns (channels_added, channels_marked_unsubscribed)."""
-
-    remote_channels: dict[str, youtube_client.SubscriptionEntry] = {}
-    page_token: str | None = None
-    while True:
-        page = await youtube_client.list_my_subscriptions(http_client, access_token, page_token)
-        for entry in page.items:
-            remote_channels[entry.channel_id] = entry
-        page_token = page.next_page_token
-        if not page_token:
-            break
+    session: AsyncSession,
+    http_client: httpx.AsyncClient,
+    access_token: str,
+    settings: AppSettings,
+    log: SyncLog,
+) -> int:
+    """Returns channels_marked_unsubscribed. channels_added is accumulated
+    directly onto `log.channels_added` (and committed) as each page of
+    subscriptions.list results is processed, rather than computed once at
+    the end — see the commit below for why."""
 
     result = await session.execute(select(Channel))
     local_channels = {c.youtube_channel_id: c for c in result.scalars()}
 
-    channels_added = 0
-    for channel_id, entry in remote_channels.items():
-        local = local_channels.get(channel_id)
-        if local is None:
-            avatar_url = await avatar_store.store_channel_avatar(http_client, channel_id, entry.thumbnail_url)
-            new_channel = Channel(
-                youtube_channel_id=channel_id,
-                title=entry.title,
-                thumbnail_url=avatar_url or entry.thumbnail_url,
-                source="subscription",
-                subscription_status="subscribed",
-                subscribed_at=entry.subscribed_at,
-            )
-            session.add(new_channel)
-            await session.flush()
-            await enqueue_backfill_task(session, new_channel, settings)
-            channels_added += 1
-        else:
-            if local.source == "manual":
-                local.source = "both"
-            if local.subscription_status == "unsubscribed":
-                local.subscription_status = "subscribed"
-                local.unsubscribed_at = None
-                local.unsubscribed_ack = False
+    remote_channel_ids: set[str] = set()
+    page_token: str | None = None
+    while True:
+        page = await youtube_client.list_my_subscriptions(http_client, access_token, page_token)
+        for entry in page.items:
+            remote_channel_ids.add(entry.channel_id)
+            local = local_channels.get(entry.channel_id)
+            if local is None:
+                avatar_url = await avatar_store.store_channel_avatar(http_client, entry.channel_id, entry.thumbnail_url)
+                new_channel = Channel(
+                    youtube_channel_id=entry.channel_id,
+                    title=entry.title,
+                    thumbnail_url=avatar_url or entry.thumbnail_url,
+                    source="subscription",
+                    subscription_status="subscribed",
+                    subscribed_at=entry.subscribed_at,
+                )
+                session.add(new_channel)
+                await session.flush()
+                await enqueue_backfill_task(session, new_channel, settings)
+                local_channels[entry.channel_id] = new_channel
+                log.channels_added += 1
+            else:
+                if local.source == "manual":
+                    local.source = "both"
+                if local.subscription_status == "unsubscribed":
+                    local.subscription_status = "subscribed"
+                    local.unsubscribed_at = None
+                    local.unsubscribed_ack = False
+
+        # Commit after each page (the YouTube API's own page size, 50
+        # subscriptions per call) instead of accumulating the entire import
+        # in one uncommitted transaction — for a large subscription list,
+        # that meant newly-imported channels (and any avatar downloads
+        # already paid for) stayed invisible to the rest of the app until
+        # the whole import finished, and a mid-import failure lost all of
+        # it. Committing per page makes channels appear in the UI as
+        # they're imported and preserves progress already made either way.
+        await session.commit()
+
+        page_token = page.next_page_token
+        if not page_token:
+            break
 
     channels_unsubscribed = 0
     for channel_id, local in local_channels.items():
@@ -80,7 +96,7 @@ async def _import_subscriptions(
             continue
         if local.subscription_status != "subscribed":
             continue
-        if channel_id in remote_channels:
+        if channel_id in remote_channel_ids:
             continue
         local.subscription_status = "unsubscribed"
         local.unsubscribed_at = datetime.utcnow()
@@ -88,7 +104,7 @@ async def _import_subscriptions(
         channels_unsubscribed += 1
 
     await session.flush()
-    return channels_added, channels_unsubscribed
+    return channels_unsubscribed
 
 
 async def _sync_channel_uploads(
@@ -119,25 +135,39 @@ async def _sync_channel_uploads(
 
 async def _sync_channel_uploads_via_api(
     session: AsyncSession, http_client: httpx.AsyncClient, channel: Channel, settings: AppSettings
-) -> None:
-    playlist_id = youtube_client.uploads_playlist_id_for_channel(channel.youtube_channel_id)
+) -> int:
+    job = await job_service.start_channel_sync_job(session, channel, "api")
+    try:
+        playlist_id = youtube_client.uploads_playlist_id_for_channel(channel.youtube_channel_id)
 
-    async def _call(api_key: str) -> youtube_client.Page:
-        return await youtube_client.list_uploads(
-            http_client, api_key, playlist_id, strict_shorts=settings.strict_shorts_detection
-        )
+        async def _call(api_key: str) -> youtube_client.Page:
+            return await youtube_client.list_uploads(
+                http_client, api_key, playlist_id, strict_shorts=settings.strict_shorts_detection
+            )
 
-    page = await key_pool.call_with_key_rotation(session, "background", _call)
-    # The uploads playlist is newest-first: stop as soon as a page yields no
-    # new rows, rather than paginating the channel's whole history again.
-    await upsert_uploads(session, channel, page.items, fetched_via="api")
+        page = await key_pool.call_with_key_rotation(session, "background", _call)
+        # The uploads playlist is newest-first: stop as soon as a page yields no
+        # new rows, rather than paginating the channel's whole history again.
+        new_count = await upsert_uploads(session, channel, page.items, fetched_via="api")
+    except Exception as exc:  # noqa: BLE001 - recorded on the job, then re-raised for the caller's own handling
+        await job_service.finish_channel_sync_job(session, job, error=str(exc))
+        raise
+    await job_service.finish_channel_sync_job(session, job, new_uploads_count=new_count)
+    return new_count
 
 
 async def _sync_channel_uploads_via_rss(
     session: AsyncSession, http_client: httpx.AsyncClient, channel: Channel
-) -> None:
-    entries = await rss.fetch_uploads_feed(http_client, channel.youtube_channel_id)
-    await upsert_uploads(session, channel, entries, fetched_via="rss")
+) -> int:
+    job = await job_service.start_channel_sync_job(session, channel, "rss")
+    try:
+        entries = await rss.fetch_uploads_feed(http_client, channel.youtube_channel_id)
+        new_count = await upsert_uploads(session, channel, entries, fetched_via="rss")
+    except Exception as exc:  # noqa: BLE001 - recorded on the job, then re-raised for the caller's own handling
+        await job_service.finish_channel_sync_job(session, job, error=str(exc))
+        raise
+    await job_service.finish_channel_sync_job(session, job, new_uploads_count=new_count)
+    return new_count
 
 
 async def run_sync(session: AsyncSession, http_client: httpx.AsyncClient, log: SyncLog) -> SyncLog:
@@ -150,8 +180,8 @@ async def run_sync(session: AsyncSession, http_client: httpx.AsyncClient, log: S
     try:
         access_token = await _get_access_token(http_client, settings)
         if access_token:
-            log.channels_added, log.channels_marked_unsubscribed = await _import_subscriptions(
-                session, http_client, access_token, settings
+            log.channels_marked_unsubscribed = await _import_subscriptions(
+                session, http_client, access_token, settings, log
             )
 
         # Every channel gets an incremental "what's new" sync each cycle,

@@ -576,6 +576,24 @@ async def test_channels_source_filter(authed_client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_channels_search_by_title_is_case_insensitive_substring(authed_client, db_session):
+    db_session.add_all(
+        [
+            Channel(youtube_channel_id="UCsearch1", title="Learn CODing Fast", source="manual"),
+            Channel(youtube_channel_id="UCsearch2", title="Late Night Coding", source="manual"),
+            Channel(youtube_channel_id="UCsearch3", title="Gardening Tips", source="manual"),
+        ]
+    )
+    await db_session.commit()
+
+    response = await authed_client.get("/api/channels", params={"search": "cod"})
+    assert {c["title"] for c in response.json()} == {"Learn CODing Fast", "Late Night Coding"}
+
+    no_match = await authed_client.get("/api/channels", params={"search": "xyz-nope"})
+    assert no_match.json() == []
+
+
+@pytest.mark.asyncio
 async def test_channels_sort_by_upload_count_and_order(authed_client, db_session):
     few = Channel(youtube_channel_id="UCfew1", title="Few Uploads", source="manual")
     many = Channel(youtube_channel_id="UCmany1", title="Many Uploads", source="manual")
@@ -659,6 +677,69 @@ async def test_backfill_tasks_list_and_retry(authed_client, db_session, monkeypa
     retried = await authed_client.post(f"/api/backfill-tasks/{task.id}/retry")
     assert retried.status_code == 200
     assert retried.json()["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_jobs_unifies_backfill_sync_jobs_and_import(authed_client, db_session):
+    from app.models import ChannelSyncJob, SyncLog
+
+    channel = Channel(youtube_channel_id="UCjobsapi1", title="Jobs API Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+
+    now = datetime.utcnow()
+
+    db_session.add(
+        BackfillTask(
+            channel_id=channel.id,
+            status="in_progress",
+            target_min_count=50,
+            target_after=now.date(),
+            fetched_count=10,
+            started_at=now,
+        )
+    )
+    db_session.add(
+        ChannelSyncJob(
+            channel_id=channel.id,
+            method="rss",
+            status="success",
+            new_uploads_count=3,
+            started_at=now,
+            finished_at=now,
+        )
+    )
+    db_session.add(
+        SyncLog(
+            status="success",
+            channels_added=2,
+            channels_marked_unsubscribed=1,
+            started_at=now,
+            finished_at=now,
+        )
+    )
+    await db_session.commit()
+
+    response = await authed_client.get("/api/jobs")
+    assert response.status_code == 200
+    body = response.json()
+
+    kinds = {job["kind"] for job in body}
+    assert kinds == {"backfill", "sync_rss", "import_subscriptions"}
+
+    backfill_job = next(j for j in body if j["kind"] == "backfill")
+    assert backfill_job["channel"]["title"] == "Jobs API Chan"
+    assert backfill_job["fetched_count"] == 10
+    assert backfill_job["target_min_count"] == 50
+    assert backfill_job["backfill_task_id"] is not None
+
+    sync_job = next(j for j in body if j["kind"] == "sync_rss")
+    assert sync_job["channel"]["title"] == "Jobs API Chan"
+    assert sync_job["detail"] == "3 new uploads"
+
+    import_job = next(j for j in body if j["kind"] == "import_subscriptions")
+    assert import_job["channel"] is None
+    assert import_job["detail"] == "2 added, 1 unsubscribed"
 
 
 @pytest.mark.asyncio

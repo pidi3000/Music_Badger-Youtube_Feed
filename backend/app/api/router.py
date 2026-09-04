@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api import api_keys, auth, backfill, channels, feed, settings, sync, tags, youtube_auth
+from app.api import api_keys, auth, backfill, channels, feed, jobs, settings, sync, tags, youtube_auth
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(auth.router)
@@ -11,4 +11,5 @@ api_router.include_router(channels.router)
 api_router.include_router(feed.router)
 api_router.include_router(api_keys.router)
 api_router.include_router(backfill.router)
+api_router.include_router(jobs.router)
 api_router.include_router(sync.router)
