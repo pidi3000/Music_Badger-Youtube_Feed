@@ -756,6 +756,21 @@ async def test_jobs_kind_filter(authed_client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_jobs_shows_a_running_import_with_live_progress_not_as_an_error(authed_client, db_session):
+    from app.models import SyncLog
+
+    db_session.add(SyncLog(status="running", channels_added=7, channels_marked_unsubscribed=0))
+    await db_session.commit()
+
+    response = await authed_client.get("/api/jobs", params={"kind": "import_subscriptions"})
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["status"] == "running"
+    assert body[0]["detail"] == "7 channels added so far..."
+
+
+@pytest.mark.asyncio
 async def test_sync_trigger_and_status(authed_client):
     triggered = await authed_client.post("/api/sync")
     assert triggered.status_code == 202

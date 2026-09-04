@@ -56,12 +56,20 @@ def _update_task_to_job(task: UpdateTask) -> JobOut:
 
 
 def _sync_log_to_job(log: SyncLog) -> JobOut:
+    # channels_added is incremented (and committed) as each page of
+    # subscriptions.list is processed, so it's a live progress count while
+    # status="running" — unsubscribe detection can only be computed once
+    # every page has been fetched, so that count only appears once finished.
+    if log.status == "running":
+        detail = f"{log.channels_added} channel{'' if log.channels_added == 1 else 's'} added so far..."
+    else:
+        detail = f"{log.channels_added} added, {log.channels_marked_unsubscribed} unsubscribed"
     return JobOut(
         id=f"import-{log.id}",
         kind="import_subscriptions",
         channel=None,
         status=log.status,
-        detail=f"{log.channels_added} added, {log.channels_marked_unsubscribed} unsubscribed",
+        detail=detail,
         error=log.error,
         started_at=log.started_at,
         finished_at=log.finished_at,

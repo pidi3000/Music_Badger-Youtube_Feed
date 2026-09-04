@@ -88,19 +88,27 @@ async def test_import_subscriptions_commits_per_page_so_progress_is_visible_imme
     ]
     call_count = 0
     visible_after_page_1 = None
+    status_after_page_1 = None
 
     async def fake_list_my_subscriptions(client, access_token, page_token=None):
-        nonlocal call_count, visible_after_page_1
+        nonlocal call_count, visible_after_page_1, status_after_page_1
         if call_count == 1:
             # By the time page 2 is being fetched, page 1's channel must
             # already be committed and visible on an independent
             # connection — not just held in this session's own
-            # uncommitted transaction.
+            # uncommitted transaction. The log's status must still read
+            # "running" at this point too — it must not have been
+            # prematurely committed as "error" by a stray default that
+            # gets overwritten only once the whole sync finishes (a past
+            # bug: the Jobs/sync-status UI showed "error" for an import
+            # that was still actively running).
             async with db_session_factory() as other_session:
                 result = await other_session.execute(
                     select(Channel).where(Channel.youtube_channel_id == "UCpage1")
                 )
                 visible_after_page_1 = result.scalar_one_or_none() is not None
+                other_log = await other_session.get(SyncLog, log.id)
+                status_after_page_1 = other_log.status
         page = pages[call_count]
         call_count += 1
         return page
@@ -119,8 +127,10 @@ async def test_import_subscriptions_commits_per_page_so_progress_is_visible_imme
     await sync_service.run_sync(db_session, http_client=None, log=log)
 
     assert visible_after_page_1 is True
+    assert status_after_page_1 == "running"
     await db_session.refresh(log)
     assert log.channels_added == 2
+    assert log.status == "success"
 
 
 @pytest.mark.asyncio

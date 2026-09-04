@@ -118,10 +118,10 @@ async def run_sync(session: AsyncSession, http_client: httpx.AsyncClient, log: S
     """Runs a sync into an existing (already-persisted) SyncLog row. See
     `create_and_run_sync` for the common case of creating one too."""
 
-    settings = await get_or_create_settings(session)
-    log.status = "error"  # overwritten below on a clean run; a safe default if something throws early
-
+    settings: AppSettings | None = None
     try:
+        settings = await get_or_create_settings(session)
+
         access_token = await _get_access_token(http_client, settings)
         if access_token:
             log.channels_marked_unsubscribed = await _import_subscriptions(
@@ -151,7 +151,8 @@ async def run_sync(session: AsyncSession, http_client: httpx.AsyncClient, log: S
         logger.exception("sync failed")
     finally:
         log.finished_at = datetime.utcnow()
-        settings.last_sync_at = datetime.utcnow()
+        if settings is not None:
+            settings.last_sync_at = datetime.utcnow()
         await session.commit()
 
     return log
