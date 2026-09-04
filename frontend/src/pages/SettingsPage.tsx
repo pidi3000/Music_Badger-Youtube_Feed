@@ -261,19 +261,28 @@ export default function SettingsPage() {
               Connected as: <strong>{settings.youtube_channel_title}</strong>
             </p>
             <button onClick={handleYouTubeDisconnect}>Disconnect YouTube</button>
+
+            <div className="sync-status">
+              <p>
+                Last sync:{' '}
+                {(syncStatus as SyncStatus | undefined)?.last_sync?.started_at
+                  ? formatDateTime((syncStatus as SyncStatus)!.last_sync!.started_at)
+                  : 'Never'}
+              </p>
+              <p>
+                Next sync:{' '}
+                {(syncStatus as SyncStatus | undefined)?.next_scheduled_at
+                  ? formatDateTime((syncStatus as SyncStatus)!.next_scheduled_at!)
+                  : '-'}
+              </p>
+              <button onClick={handleSync} disabled={(syncStatus as SyncStatus | undefined)?.is_running}>
+                {(syncStatus as SyncStatus | undefined)?.is_running ? 'Syncing...' : 'Sync Subscriptions'}
+              </button>
+            </div>
           </div>
         ) : (
           <button onClick={handleYouTubeConnect}>Connect YouTube</button>
         )}
-      </section>
-
-      {/* Sync */}
-      <section className="settings-section">
-        <h2>Sync</h2>
-        <p>Last sync: {(syncStatus as SyncStatus | undefined)?.last_sync?.started_at ? formatDateTime((syncStatus as SyncStatus)!.last_sync!.started_at) : 'Never'}</p>
-        <button onClick={handleSync} disabled={(syncStatus as SyncStatus | undefined)?.is_running}>
-          {(syncStatus as SyncStatus | undefined)?.is_running ? 'Syncing...' : 'Sync Now'}
-        </button>
       </section>
 
       {/* API Keys */}

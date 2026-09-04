@@ -106,11 +106,11 @@
 .load-more-container {
   display: flex;
   justify-content: center;
+  align-items: center;
+  min-height: 60px;
   margin-top: 30px;
-}
-
-.load-more-container button {
-  padding: 12px 30px;
+  color: var(--text-light);
+  font-size: 14px;
 }
 
 @media (max-width: 768px) {

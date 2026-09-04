@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import { useFeed, Upload, FeedResponse, VideoType } from '../api/feed';
 import { useTags } from '../api/tags';
 import UploadCard from '../components/UploadCard';
@@ -44,10 +44,30 @@ export default function FeedPage() {
   }, [feed, cursor, hasLoadedInitial]);
 
   const handleLoadMore = () => {
-    if (feed?.next_cursor) {
+    if (feed?.next_cursor && !isLoading) {
       setCursor(feed.next_cursor);
     }
   };
+
+  // Auto-load the next page once the sentinel below the grid scrolls into
+  // view, instead of requiring a manual "Load More" click. rootMargin
+  // triggers it a bit before it's actually on screen so the next page is
+  // usually ready by the time the user reaches the bottom.
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const sentinel = loadMoreRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          handleLoadMore();
+        }
+      },
+      { rootMargin: '400px' },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [feed?.next_cursor, isLoading]);
 
   const resetPaging = () => {
     setCursor(undefined);
@@ -134,10 +154,8 @@ export default function FeedPage() {
       </div>
 
       {feed?.next_cursor && (
-        <div className="load-more-container">
-          <button onClick={handleLoadMore} disabled={isLoading}>
-            {isLoading ? 'Loading...' : 'Load More'}
-          </button>
+        <div ref={loadMoreRef} className="load-more-container">
+          {isLoading && <p>Loading...</p>}
         </div>
       )}
     </div>

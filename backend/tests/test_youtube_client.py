@@ -402,6 +402,27 @@ async def test_is_actual_short_none_on_unexpected_status():
 
 
 @pytest.mark.asyncio
+async def test_is_actual_short_sends_consent_cookie_and_browser_user_agent():
+    """Without these, YouTube serves/redirects to its cookie-consent
+    interstitial for every request regardless of whether the video is
+    actually a Short, making the whole check meaningless (a past bug: every
+    video came back "not a short", even ones a duration-only check and
+    manual inspection both agreed were)."""
+
+    captured_headers: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_headers.update(request.headers)
+        return httpx.Response(200, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await youtube_client._is_actual_short(client, "vid1")
+
+    assert "consent=yes" in captured_headers.get("cookie", "").lower()
+    assert "python-httpx" not in captured_headers.get("user-agent", "").lower()
+
+
+@pytest.mark.asyncio
 async def test_is_actual_short_none_on_connection_error():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("boom", request=request)

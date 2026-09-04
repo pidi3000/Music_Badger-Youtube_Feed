@@ -142,6 +142,24 @@ def _parse_duration_seconds(duration: str) -> int:
     return hours * 3600 + minutes * 60 + seconds
 
 
+_SHORTS_CHECK_HEADERS = {
+    # Without a browser-like User-Agent, and without pre-accepting the EU
+    # cookie-consent interstitial, YouTube serves (or redirects to) a
+    # consent page for *every* /shorts/{id} request regardless of whether
+    # the video is actually a Short — which previously made every strict
+    # check come back "not a short" (a 3xx to the consent flow, mistaken
+    # for the "not a Short, redirected to /watch" signal). "CONSENT=YES+1"
+    # is the long-documented way to opt out of that interstitial for an
+    # unauthenticated request.
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cookie": "CONSENT=YES+1",
+}
+
+
 async def _is_actual_short(client: httpx.AsyncClient, video_id: str) -> bool | None:
     """Unofficial (not part of the Data API, costs no quota) but well-known
     check: YouTube serves `/shorts/{id}` directly (200) for an actual Short
@@ -153,7 +171,10 @@ async def _is_actual_short(client: httpx.AsyncClient, video_id: str) -> bool | N
 
     try:
         response = await client.get(
-            f"https://www.youtube.com/shorts/{video_id}", follow_redirects=False, timeout=10
+            f"https://www.youtube.com/shorts/{video_id}",
+            follow_redirects=False,
+            timeout=10,
+            headers=_SHORTS_CHECK_HEADERS,
         )
     except httpx.HTTPError:
         return None

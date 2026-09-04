@@ -15,7 +15,10 @@ const VIDEO_TYPE_LABELS: Record<Upload['video_type'], string> = {
 };
 
 export default function UploadCard({ upload }: UploadCardProps) {
-  const videoUrl = `https://www.youtube.com/watch?v=${upload.youtube_video_id}`;
+  const videoUrl =
+    upload.video_type === 'short'
+      ? `https://www.youtube.com/shorts/${upload.youtube_video_id}`
+      : `https://www.youtube.com/watch?v=${upload.youtube_video_id}`;
   const channelUrl = youtubeChannelUrl(upload.channel);
 
   const handleClick = () => {
