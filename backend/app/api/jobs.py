@@ -11,10 +11,27 @@ from sqlalchemy.orm import selectinload
 
 from app.deps import DbSession, RequireAuth
 from app.models import BackfillTask, SyncLog, UpdateTask
-from app.schemas import JobKind, JobOut
+from app.schemas import JobKind, JobOut, JobState
 from app.services.channel_service import channel_to_ref
 
 router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[RequireAuth])
+
+# Maps every raw status a BackfillTask/UpdateTask/SyncLog can carry onto one
+# of the four coarse JobState buckets the Jobs page filters by.
+_STATE_GROUPS: dict[str, JobState] = {
+    "queued": "queued",
+    "in_progress": "running",
+    "running": "running",
+    "completed": "done",
+    "success": "done",
+    "paused_quota": "stopped",
+    "failed": "stopped",
+    "error": "stopped",
+}
+
+
+def _state_group(status: str) -> JobState | None:
+    return _STATE_GROUPS.get(status)
 
 
 def _backfill_to_job(task: BackfillTask) -> JobOut:
@@ -82,7 +99,7 @@ def _sync_log_to_job(log: SyncLog) -> JobOut:
 
 
 @router.get("", response_model=list[JobOut])
-async def list_jobs(session: DbSession, limit: int = 100, kind: JobKind | None = None):
+async def list_jobs(session: DbSession, limit: int = 100, kind: JobKind | None = None, state: JobState | None = None):
     backfill_result = await session.execute(
         select(BackfillTask)
         .options(selectinload(BackfillTask.channel))
@@ -105,5 +122,7 @@ async def list_jobs(session: DbSession, limit: int = 100, kind: JobKind | None =
     )
     if kind is not None:
         jobs = [j for j in jobs if j.kind == kind]
+    if state is not None:
+        jobs = [j for j in jobs if _state_group(j.status) == state]
     jobs.sort(key=lambda j: j.finished_at or j.started_at, reverse=True)
     return jobs[:limit]

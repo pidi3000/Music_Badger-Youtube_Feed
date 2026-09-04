@@ -2,6 +2,7 @@ import { useQuery, UseQueryOptions } from '@tanstack/react-query';
 import { apiCall } from './client';
 
 export type JobKind = 'update' | 'backfill' | 'import_subscriptions';
+export type JobState = 'queued' | 'running' | 'done' | 'stopped';
 
 export interface Job {
   id: string;
@@ -21,15 +22,23 @@ export interface Job {
   backfill_task_id: number | null;
 }
 
-export async function getJobs(kind?: JobKind): Promise<Job[]> {
-  const params = kind ? `?kind=${kind}` : '';
-  return apiCall<Job[]>(`/api/jobs${params}`);
+export interface JobsQuery {
+  kind?: JobKind;
+  state?: JobState;
 }
 
-export function useJobs(kind?: JobKind, options?: Omit<UseQueryOptions, 'queryKey' | 'queryFn'>) {
+export async function getJobs(query?: JobsQuery): Promise<Job[]> {
+  const params = new URLSearchParams();
+  if (query?.kind) params.append('kind', query.kind);
+  if (query?.state) params.append('state', query.state);
+  const qs = params.size > 0 ? `?${params.toString()}` : '';
+  return apiCall<Job[]>(`/api/jobs${qs}`);
+}
+
+export function useJobs(query?: JobsQuery, options?: Omit<UseQueryOptions, 'queryKey' | 'queryFn'>) {
   return useQuery({
-    queryKey: ['jobs', kind],
-    queryFn: () => getJobs(kind),
+    queryKey: ['jobs', query],
+    queryFn: () => getJobs(query),
     ...options,
   });
 }

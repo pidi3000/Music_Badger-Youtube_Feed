@@ -208,6 +208,13 @@ class SyncStatusOut(BaseModel):
 # ------------------------------------------------------------------ jobs --
 JobKind = Literal["update", "backfill", "import_subscriptions"]
 
+# A coarse grouping over the several different raw `status` values each job
+# kind actually stores (BackfillTask/UpdateTask: queued | in_progress |
+# paused_quota | completed | failed; SyncLog: running | success | error) —
+# lets the Jobs page filter across kinds by one consistent state, see
+# api.jobs._state_group.
+JobState = Literal["queued", "running", "done", "stopped"]
+
 
 class JobOut(BaseModel):
     id: str

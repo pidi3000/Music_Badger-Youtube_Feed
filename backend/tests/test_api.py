@@ -756,6 +756,47 @@ async def test_jobs_kind_filter(authed_client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_jobs_state_filter_groups_raw_statuses(authed_client, db_session):
+    from app.models import SyncLog, UpdateTask
+
+    channel = Channel(youtube_channel_id="UCjobsstate1", title="State Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+
+    now = datetime.utcnow()
+    db_session.add_all(
+        [
+            BackfillTask(channel_id=channel.id, status="queued", target_min_count=50, target_after=now.date()),
+            BackfillTask(channel_id=channel.id, status="in_progress", target_min_count=50, target_after=now.date()),
+            BackfillTask(channel_id=channel.id, status="completed", target_min_count=50, target_after=now.date()),
+            BackfillTask(channel_id=channel.id, status="failed", target_min_count=50, target_after=now.date()),
+            UpdateTask(channel_id=channel.id, status="paused_quota"),
+            SyncLog(status="running"),
+            SyncLog(status="success"),
+            SyncLog(status="error"),
+        ]
+    )
+    await db_session.commit()
+
+    async def state_kinds(state: str) -> set[str]:
+        response = await authed_client.get("/api/jobs", params={"state": state})
+        assert response.status_code == 200
+        return {job["status"] for job in response.json()}
+
+    assert await state_kinds("queued") == {"queued"}
+    assert await state_kinds("running") == {"in_progress", "running"}
+    assert await state_kinds("done") == {"completed", "success"}
+    assert await state_kinds("stopped") == {"failed", "paused_quota", "error"}
+
+    # Combined with the kind filter.
+    combined = await authed_client.get("/api/jobs", params={"kind": "backfill", "state": "stopped"})
+    combined_body = combined.json()
+    assert len(combined_body) == 1
+    assert combined_body[0]["kind"] == "backfill"
+    assert combined_body[0]["status"] == "failed"
+
+
+@pytest.mark.asyncio
 async def test_jobs_shows_a_running_import_with_live_progress_not_as_an_error(authed_client, db_session):
     from app.models import SyncLog
 

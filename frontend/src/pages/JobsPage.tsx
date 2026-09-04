@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useJobs, Job, JobKind } from '../api/jobs';
+import { useJobs, Job, JobKind, JobState } from '../api/jobs';
 import { useRetryBackfillTask } from '../api/backfill';
 import { useToast } from '../context/ToastContext';
 import { getErrorMessage } from '../utils/errors';
@@ -15,22 +15,37 @@ const KIND_FILTERS: { value: JobKind | 'all'; label: string }[] = [
   { value: 'import_subscriptions', label: 'Subscription update' },
 ];
 
+const STATE_FILTERS: { value: JobState | 'all'; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'queued', label: 'Queued' },
+  { value: 'running', label: 'Running' },
+  { value: 'done', label: 'Done' },
+  { value: 'stopped', label: 'Stopped / Error' },
+];
+
 export default function JobsPage() {
   const [kindFilter, setKindFilter] = useState<JobKind | 'all'>('all');
+  const [stateFilter, setStateFilter] = useState<JobState | 'all'>('all');
 
-  const { data: jobsData, isLoading } = useJobs(kindFilter === 'all' ? undefined : kindFilter, {
-    refetchInterval: (query) => {
-      // Poll every 5 seconds while anything is still active. Reads
-      // query.state.data (the value TanStack Query passes in), not the
-      // `jobsData` this hook call is about to return — refetchInterval
-      // runs synchronously during this very useJobs() call, before that
-      // destructuring assignment completes, so closing over `jobsData`
-      // here hits its temporal dead zone.
-      const jobs = query.state.data as Job[] | undefined;
-      const hasActiveJob = jobs?.some((job) => ACTIVE_STATUSES.has(job.status));
-      return hasActiveJob ? 5000 : false;
+  const { data: jobsData, isLoading } = useJobs(
+    {
+      kind: kindFilter === 'all' ? undefined : kindFilter,
+      state: stateFilter === 'all' ? undefined : stateFilter,
     },
-  });
+    {
+      refetchInterval: (query) => {
+        // Poll every 5 seconds while anything is still active. Reads
+        // query.state.data (the value TanStack Query passes in), not the
+        // `jobsData` this hook call is about to return — refetchInterval
+        // runs synchronously during this very useJobs() call, before that
+        // destructuring assignment completes, so closing over `jobsData`
+        // here hits its temporal dead zone.
+        const jobs = query.state.data as Job[] | undefined;
+        const hasActiveJob = jobs?.some((job) => ACTIVE_STATUSES.has(job.status));
+        return hasActiveJob ? 5000 : false;
+      },
+    },
+  );
 
   const retryMutation = useRetryBackfillTask();
   const { showError } = useToast();
@@ -58,6 +73,19 @@ export default function JobsPage() {
             type="button"
             className={`jobs-filter-btn${kindFilter === f.value ? ' active' : ''}`}
             onClick={() => setKindFilter(f.value)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="jobs-filter-bar">
+        {STATE_FILTERS.map((f) => (
+          <button
+            key={f.value}
+            type="button"
+            className={`jobs-filter-btn${stateFilter === f.value ? ' active' : ''}`}
+            onClick={() => setStateFilter(f.value)}
           >
             {f.label}
           </button>
