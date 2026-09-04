@@ -103,6 +103,10 @@ uvicorn app.main:app --reload
 pytest                                         # 50 tests, mocked YouTube — see below
 ```
 
+Once the venv is set up, `backend/start.sh` wraps the last three steps
+(loads `.env`, runs `alembic upgrade head`, starts `uvicorn --reload`) for
+day-to-day use.
+
 Frontend (React + TypeScript, Vite):
 
 ```bash
@@ -111,6 +115,8 @@ npm install
 npm run dev        # proxies /api to http://localhost:8000, see vite.config.ts
 npm run build       # typecheck + production build
 ```
+
+`frontend/start.sh` wraps `npm install` + `npm run dev` for day-to-day use.
 
 ### Testing notes
 
