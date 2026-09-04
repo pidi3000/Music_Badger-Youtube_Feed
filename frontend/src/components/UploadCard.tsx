@@ -1,5 +1,6 @@
 import { Upload } from '../api/feed';
 import { youtubeChannelUrl } from '../utils/youtube';
+import { formatDate } from '../utils/dates';
 import ChannelAvatar from './ChannelAvatar';
 import '../styles/upload-card.css';
 
@@ -16,7 +17,7 @@ const VIDEO_TYPE_LABELS: Record<Upload['video_type'], string> = {
 export default function UploadCard({ upload }: UploadCardProps) {
   const videoUrl = `https://www.youtube.com/watch?v=${upload.youtube_video_id}`;
   const channelUrl = youtubeChannelUrl(upload.channel);
-  const publishedDate = new Date(upload.published_at).toLocaleDateString();
+  const publishedDate = formatDate(upload.published_at);
 
   const handleClick = () => {
     window.open(videoUrl, '_blank');

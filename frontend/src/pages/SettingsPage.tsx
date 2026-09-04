@@ -5,6 +5,7 @@ import { useApiKeys, useCreateApiKey, useDeleteApiKey } from '../api/apiKeys';
 import { useSyncStatus, useStartSync, SyncStatus } from '../api/sync';
 import { useToast } from '../context/ToastContext';
 import { getErrorMessage } from '../utils/errors';
+import { formatDate, formatDateTime } from '../utils/dates';
 import '../styles/settings.css';
 
 export default function SettingsPage() {
@@ -269,7 +270,7 @@ export default function SettingsPage() {
       {/* Sync */}
       <section className="settings-section">
         <h2>Sync</h2>
-        <p>Last sync: {(syncStatus as SyncStatus | undefined)?.last_sync?.started_at ? new Date((syncStatus as SyncStatus)!.last_sync!.started_at).toLocaleString() : 'Never'}</p>
+        <p>Last sync: {(syncStatus as SyncStatus | undefined)?.last_sync?.started_at ? formatDateTime((syncStatus as SyncStatus)!.last_sync!.started_at) : 'Never'}</p>
         <button onClick={handleSync} disabled={(syncStatus as SyncStatus | undefined)?.is_running}>
           {(syncStatus as SyncStatus | undefined)?.is_running ? 'Syncing...' : 'Sync Now'}
         </button>
@@ -310,8 +311,8 @@ export default function SettingsPage() {
                 <tr key={key.id}>
                   <td>{key.label}</td>
                   <td>{key.status}</td>
-                  <td>{key.quota_resets_at ? new Date(key.quota_resets_at).toLocaleDateString() : '-'}</td>
-                  <td>{key.last_used_at ? new Date(key.last_used_at).toLocaleString() : '-'}</td>
+                  <td>{key.quota_resets_at ? formatDate(key.quota_resets_at) : '-'}</td>
+                  <td>{key.last_used_at ? formatDateTime(key.last_used_at) : '-'}</td>
                   <td>
                     <button onClick={() => handleDeleteApiKey(key.id)}>Delete</button>
                   </td>

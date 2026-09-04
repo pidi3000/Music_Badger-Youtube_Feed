@@ -1,6 +1,7 @@
 import { Channel } from '../api/channels';
 import { Tag } from '../api/tags';
 import { youtubeChannelUrl } from '../utils/youtube';
+import { formatDate, formatDateTime } from '../utils/dates';
 import ChannelAvatar from './ChannelAvatar';
 import '../styles/channel-row.css';
 
@@ -24,13 +25,11 @@ const BACKFILL_STATUS_COLORS: Record<string, string> = {
 function formatChannelStats(channel: Channel): string {
   const parts = [`${channel.upload_count} upload${channel.upload_count === 1 ? '' : 's'}`];
   if (channel.oldest_upload_at) {
-    parts.push(`oldest ${new Date(channel.oldest_upload_at).toLocaleDateString()}`);
+    parts.push(`oldest ${formatDate(channel.oldest_upload_at)}`);
   }
-  parts.push(
-    channel.last_synced_at ? `updated ${new Date(channel.last_synced_at).toLocaleString()}` : 'never updated',
-  );
+  parts.push(channel.last_synced_at ? `updated ${formatDateTime(channel.last_synced_at)}` : 'never updated');
   if (channel.subscribed_at) {
-    parts.push(`subscribed ${new Date(channel.subscribed_at).toLocaleDateString()}`);
+    parts.push(`subscribed ${formatDate(channel.subscribed_at)}`);
   }
   return parts.join(' · ');
 }
