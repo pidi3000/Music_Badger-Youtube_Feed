@@ -87,6 +87,84 @@ async def test_completes_when_min_count_and_date_target_both_reached(db_session,
 
 
 @pytest.mark.asyncio
+async def test_requests_no_more_than_the_remaining_target_count(db_session, monkeypatch):
+    """A target_min_count of 5 must not pull a full 50-item page on the
+    first call — YouTube returns however many the request asks for, so a
+    fixed maxResults=50 meant even a tiny target over-fetched relative to
+    what the user configured."""
+
+    channel = await make_channel(db_session)
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
+    await db_session.commit()
+
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=5, days=5))
+    await db_session.commit()
+
+    now = datetime.utcnow()
+    requested_max_results: list[int] = []
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        requested_max_results.append(max_results)
+        # All 5 requested items are already older than the 5-day cutoff, so
+        # both the count and date targets are satisfied by this one page.
+        return make_page(
+            [(f"v{i}", now - timedelta(days=10 + i)) for i in range(max_results)],
+            next_token="more-available",
+        )
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    await backfill_service.process_task(db_session, http_client=None, task=task)
+
+    await db_session.refresh(task)
+    assert requested_max_results == [5]
+    assert task.status == "completed"
+    assert task.fetched_count == 5
+
+
+@pytest.mark.asyncio
+async def test_requests_full_pages_again_once_count_target_is_met_but_date_target_is_not(db_session, monkeypatch):
+    """Once target_min_count is already satisfied but target_after isn't
+    (an active channel can post more than target_min_count within the
+    retention window), further pages should go back to full-size requests
+    — shrinking them further wouldn't reduce the total fetched, only add
+    more API calls to reach the same date cutoff."""
+
+    channel = await make_channel(db_session)
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
+    await db_session.commit()
+
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=2, days=5))
+    await db_session.commit()
+
+    now = datetime.utcnow()
+    requested_max_results: list[int] = []
+    pages = iter(
+        [
+            # First page (sized to the target_min_count=2) is still too
+            # recent to satisfy the 5-day cutoff.
+            make_page([("v1", now), ("v2", now - timedelta(days=1))], next_token="p2"),
+            # Count target already met; this page should be requested at
+            # full size (50), not shrunk further.
+            make_page([("v3", now - timedelta(days=10))], next_token=None),
+        ]
+    )
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        requested_max_results.append(max_results)
+        return next(pages)
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    await backfill_service.process_task(db_session, http_client=None, task=task)
+
+    await db_session.refresh(task)
+    assert requested_max_results == [2, 50]
+    assert task.status == "completed"
+    assert task.fetched_count == 3
+
+
+@pytest.mark.asyncio
 async def test_completes_when_channel_has_fewer_uploads_than_target(db_session, monkeypatch):
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))

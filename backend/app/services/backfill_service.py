@@ -74,13 +74,27 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
     try:
         while True:
             cursor = task.resume_cursor
+            # Request no more than what's still needed to reach
+            # target_min_count — a fixed maxResults=50 meant a target of, say,
+            # 5 still pulled a full 50-item page on the very first call
+            # (YouTube returns whatever the request asks for, not whatever
+            # the target needs). Once the count target is already met and
+            # we're only still chasing target_after (some channels post
+            # often enough that "at least N days back" genuinely needs more
+            # than target_min_count items), full 50-item pages are the more
+            # efficient choice again.
+            remaining = task.target_min_count - task.fetched_count
+            page_max_results = min(50, remaining) if remaining > 0 else 50
 
-            async def _call(api_key: str, _cursor: str | None = cursor) -> youtube_client.Page:
+            async def _call(
+                api_key: str, _cursor: str | None = cursor, _max_results: int = page_max_results
+            ) -> youtube_client.Page:
                 return await youtube_client.list_uploads(
                     http_client,
                     api_key,
                     playlist_id,
                     page_token=_cursor,
+                    max_results=_max_results,
                     strict_shorts=settings.strict_shorts_detection,
                 )
 
