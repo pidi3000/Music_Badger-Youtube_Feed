@@ -82,6 +82,27 @@
   margin-bottom: 30px;
 }
 
+.feed-separator {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-light);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.feed-separator:not(:first-child) {
+  margin-top: 10px;
+}
+
+.feed-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
 .load-more-container {
   display: flex;
   justify-content: center;

@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { useFeed, Upload, FeedResponse, VideoType } from '../api/feed';
 import { useTags } from '../api/tags';
 import UploadCard from '../components/UploadCard';
+import { relativeTimeInfo } from '../utils/dates';
 import '../styles/feed.css';
 
 const VIDEO_TYPE_FILTERS: { value: VideoType | undefined; label: string }[] = [
@@ -106,7 +107,29 @@ export default function FeedPage() {
         {allItems.length === 0 && !isLoading ? (
           <p>No uploads found</p>
         ) : (
-          allItems.map((upload) => <UploadCard key={upload.id} upload={upload} />)
+          (() => {
+            // allItems is newest-first (see api.feed), so bucketKey only
+            // ever moves from more-recent to less-recent buckets as we
+            // scan down — one separator per bucket, right before its first
+            // upload. Anything under 24h old has bucketKey === null and
+            // never gets a separator (see relativeTimeInfo).
+            let lastBucketKey: string | null | undefined;
+            return allItems.map((upload) => {
+              const { bucketKey, label } = relativeTimeInfo(upload.published_at);
+              const showSeparator = bucketKey !== null && bucketKey !== lastBucketKey;
+              lastBucketKey = bucketKey;
+              return (
+                <Fragment key={upload.id}>
+                  {showSeparator && (
+                    <div className="feed-separator">
+                      <span>{label}</span>
+                    </div>
+                  )}
+                  <UploadCard upload={upload} />
+                </Fragment>
+              );
+            });
+          })()
         )}
       </div>
 
