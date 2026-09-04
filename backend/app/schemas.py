@@ -50,6 +50,11 @@ class SettingsUpdate(BaseModel):
     strict_shorts_detection: bool | None = None
 
 
+class RescanShortsResult(BaseModel):
+    checked: int
+    reclassified: int
+
+
 class YoutubeAuthStart(BaseModel):
     authorization_url: str
 

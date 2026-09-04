@@ -168,7 +168,7 @@ class VideoClassification:
     verified: bool = False
 
 
-async def _classify_video_types(
+async def classify_video_types(
     client: httpx.AsyncClient, api_key: str, video_ids: list[str], strict_shorts: bool = False
 ) -> dict[str, VideoClassification]:
     """Best-effort video/short/live classification via one batched
@@ -291,7 +291,7 @@ async def list_uploads(
     # themselves. A genuine quota exhaustion (YoutubeQuotaExceeded) is left
     # to propagate as usual so key rotation still reacts to it.
     try:
-        classifications = await _classify_video_types(
+        classifications = await classify_video_types(
             client, api_key, [item.video_id for item in items], strict_shorts=strict_shorts
         )
     except YoutubeApiError:

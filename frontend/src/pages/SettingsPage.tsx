@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useSettings, useUpdateSettings, useYouTubeAuthStart, useDeleteYouTubeAuth } from '../api/settings';
+import { useSettings, useUpdateSettings, useRescanShorts, useYouTubeAuthStart, useDeleteYouTubeAuth } from '../api/settings';
 import { useApiKeys, useCreateApiKey, useDeleteApiKey } from '../api/apiKeys';
 import { useSyncStatus, useStartSync, SyncStatus } from '../api/sync';
 import { useToast } from '../context/ToastContext';
@@ -20,6 +20,7 @@ export default function SettingsPage() {
   const [backfillWorkerIntervalSeconds, setBackfillWorkerIntervalSeconds] = useState(0);
   const [strictShortsDetection, setStrictShortsDetection] = useState(false);
   const updateSettingsMutation = useUpdateSettings();
+  const rescanShortsMutation = useRescanShorts();
 
   // YouTube
   const youtubeAuthStartMutation = useYouTubeAuthStart();
@@ -37,7 +38,7 @@ export default function SettingsPage() {
   const { data: syncStatus } = useSyncStatus();
   const startSyncMutation = useStartSync();
 
-  const { showError } = useToast();
+  const { showError, showSuccess } = useToast();
 
   useEffect(() => {
     if (settings) {
@@ -71,6 +72,19 @@ export default function SettingsPage() {
       });
     } catch (err) {
       showError(getErrorMessage(err, 'Failed to save settings'));
+    }
+  };
+
+  const handleRescanShorts = async () => {
+    try {
+      const result = await rescanShortsMutation.mutateAsync();
+      showSuccess(
+        result.checked === 0
+          ? 'No unverified uploads from the last 7 days to rescan'
+          : `Rescanned ${result.checked} upload${result.checked === 1 ? '' : 's'} — ${result.reclassified} reclassified`,
+      );
+    } catch (err) {
+      showError(getErrorMessage(err, 'Failed to rescan uploads'));
     }
   };
 
@@ -193,6 +207,18 @@ export default function SettingsPage() {
                 quota, but adds one extra web request per such upload and relies on an unofficial, undocumented
                 YouTube behavior.
               </p>
+              {settings?.strict_shorts_detection && (
+                <div className="rescan-shorts">
+                  <button type="button" onClick={handleRescanShorts} disabled={rescanShortsMutation.isPending}>
+                    {rescanShortsMutation.isPending ? 'Rescanning...' : 'Rescan last 7 days'}
+                  </button>
+                  <p className="setting-hint">
+                    Re-checks uploads from the last 7 days that haven't been verified yet — lets you apply
+                    strict detection to uploads fetched before you turned it on, without waiting for a fresh
+                    sync.
+                  </p>
+                </div>
+              )}
             </div>
             <button type="submit">Save Settings</button>
           </form>

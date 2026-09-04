@@ -342,6 +342,60 @@ async def test_settings_strict_shorts_detection_toggle(authed_client):
 
 
 @pytest.mark.asyncio
+async def test_rescan_shorts_endpoint(authed_client, db_session, monkeypatch):
+    from app.services import youtube_client
+
+    channel = Channel(youtube_channel_id="UCrescan1", title="Rescan Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    db_session.add(
+        Upload(
+            channel_id=channel.id,
+            youtube_video_id="rescan-vid1",
+            title="Recent upload",
+            published_at=datetime.utcnow() - timedelta(days=1),
+            thumbnail_url=None,
+            fetched_via="api",
+            video_type="video",
+        )
+    )
+    await db_session.commit()
+
+    async def fake_classify_video_types(client, api_key, video_ids, strict_shorts=False):
+        assert strict_shorts is True
+        return {vid: youtube_client.VideoClassification("short", verified=True) for vid in video_ids}
+
+    monkeypatch.setattr(youtube_client, "classify_video_types", fake_classify_video_types)
+
+    response = await authed_client.post("/api/settings/rescan-shorts")
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"checked": 1, "reclassified": 1}
+
+
+@pytest.mark.asyncio
+async def test_rescan_shorts_endpoint_returns_503_with_no_active_key(authed_client, db_session):
+    channel = Channel(youtube_channel_id="UCrescan2", title="Rescan Chan 2", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+    db_session.add(
+        Upload(
+            channel_id=channel.id,
+            youtube_video_id="rescan-vid2",
+            title="Recent upload",
+            published_at=datetime.utcnow() - timedelta(days=1),
+            thumbnail_url=None,
+            fetched_via="api",
+        )
+    )
+    await db_session.commit()
+
+    response = await authed_client.post("/api/settings/rescan-shorts")
+    assert response.status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_settings_interval_update_live_reschedules_the_scheduler_jobs(app, authed_client):
     from datetime import timedelta
 

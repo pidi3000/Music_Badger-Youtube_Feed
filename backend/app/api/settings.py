@@ -1,8 +1,10 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 
-from app.deps import DbSession, RequireAuth, SchedulerDep
+from app.deps import DbSession, HttpClient, RequireAuth, SchedulerDep
 from app.scheduler import reschedule_backfill_job, reschedule_sync_job
-from app.schemas import SettingsOut, SettingsUpdate
+from app.schemas import RescanShortsResult, SettingsOut, SettingsUpdate
+from app.services import key_pool
+from app.services.reclassify_service import rescan_recent_uploads
 from app.services.settings_service import get_or_create_settings
 
 router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[RequireAuth])
@@ -57,3 +59,18 @@ async def update_settings(body: SettingsUpdate, session: DbSession, scheduler: S
     await session.commit()
     await session.refresh(settings)
     return _to_out(settings)
+
+
+@router.post("/rescan-shorts", response_model=RescanShortsResult)
+async def rescan_shorts(session: DbSession, http_client: HttpClient):
+    try:
+        result = await rescan_recent_uploads(session, http_client)
+    except key_pool.QuotaExhaustedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "no active-use API key available — uploads checked so far were still saved, "
+                "add a key (or wait for quota to reset) and rescan again"
+            ),
+        ) from exc
+    return RescanShortsResult(checked=result.checked, reclassified=result.reclassified)

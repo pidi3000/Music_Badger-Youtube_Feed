@@ -32,6 +32,17 @@ export async function updateSettings(
   });
 }
 
+export interface RescanShortsResult {
+  checked: number;
+  reclassified: number;
+}
+
+export async function rescanShorts(): Promise<RescanShortsResult> {
+  return apiCall('/api/settings/rescan-shorts', {
+    method: 'POST',
+  });
+}
+
 export async function getYouTubeAuthStart(): Promise<{ authorization_url: string }> {
   return apiCall('/api/youtube/auth/start');
 }
@@ -55,6 +66,16 @@ export function useUpdateSettings() {
     mutationFn: updateSettings,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
+    },
+  });
+}
+
+export function useRescanShorts() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: rescanShorts,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['feed'] });
     },
   });
 }

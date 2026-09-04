@@ -64,6 +64,34 @@
   line-height: 1.4;
 }
 
+.rescan-shorts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.rescan-shorts button {
+  align-self: flex-start;
+  padding: 8px 16px;
+  font-size: 13px;
+  background: var(--bg-light);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.rescan-shorts button:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.rescan-shorts button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .read-only {
   padding: 10px 12px;
   background: var(--bg);
