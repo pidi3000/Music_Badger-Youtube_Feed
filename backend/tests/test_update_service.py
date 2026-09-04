@@ -205,10 +205,10 @@ async def test_falls_back_to_rss_on_quota_exhaustion_when_enabled(db_session, mo
 
 
 @pytest.mark.asyncio
-async def test_quick_sync_stops_after_one_page_even_with_more_available(db_session, monkeypatch):
-    channel = await make_channel(db_session)
+async def test_fetch_quick_sync_only_fetches_one_page_even_with_more_available(db_session, monkeypatch):
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
+    settings = await get_or_create_settings(db_session)
 
     now = datetime.utcnow()
     call_count = 0
@@ -220,11 +220,56 @@ async def test_quick_sync_stops_after_one_page_even_with_more_available(db_sessi
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
 
-    task = await update_service.run_quick_sync(db_session, http_client=None, channel=channel)
+    result = await update_service.fetch_quick_sync(db_session, http_client=None, youtube_channel_id="UCabc123", settings=settings)
 
     assert call_count == 1
+    assert result.fetched_via == "api"
+    assert len(result.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_quick_sync_does_not_touch_channel_upload_or_task_tables(db_session, monkeypatch):
+    """The whole point of splitting fetch from apply is that fetching must
+    be pure network I/O — no Channel/Upload/UpdateTask writes — so a caller
+    can run it before creating anything, and never hold the DB write lock
+    across the HTTP call."""
+
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
+    await db_session.commit()
+    settings = await get_or_create_settings(db_session)
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        return make_page([("v1", datetime.utcnow())], next_token=None)
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    await update_service.fetch_quick_sync(db_session, http_client=None, youtube_channel_id="UCabc123", settings=settings)
+
+    assert list((await db_session.execute(select(Channel))).scalars()) == []
+    assert list((await db_session.execute(select(UpdateTask))).scalars()) == []
+
+
+@pytest.mark.asyncio
+async def test_apply_quick_sync_persists_the_fetched_result(db_session):
+    channel = await make_channel(db_session)
+    await db_session.commit()
+
+    now = datetime.utcnow()
+    result = update_service.QuickSyncResult(
+        items=[youtube_client.PlaylistItem(video_id="v1", title="t", published_at=now, thumbnail_url=None)],
+        fetched_via="api",
+    )
+
+    task = await update_service.apply_quick_sync(db_session, channel, result)
+
     assert task.status == "completed"
     assert task.fetched_count == 1
+    assert task.used_rss_fallback is False
+
+    from app.models import Upload
+
+    uploads = list((await db_session.execute(select(Upload).where(Upload.channel_id == channel.id))).scalars())
+    assert len(uploads) == 1
 
 
 @pytest.mark.asyncio

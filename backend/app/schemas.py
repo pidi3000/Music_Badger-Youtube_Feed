@@ -188,6 +188,8 @@ class SyncLogOut(BaseModel):
     channels_added: int
     channels_marked_unsubscribed: int
     rss_fallback_channels: int
+    total_subscriptions: int | None
+    subscriptions_processed: int
     error: str | None
 
 

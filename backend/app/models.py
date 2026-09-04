@@ -256,3 +256,10 @@ class SyncLog(Base):
     channels_marked_unsubscribed: Mapped[int] = mapped_column(Integer, default=0)
     rss_fallback_channels: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Total subscription count from YouTube's own pageInfo.totalResults on
+    # the first subscriptions.list page — null until that first call
+    # returns (or forever, if the sync never reached subscription import).
+    # Powers the Jobs page progress bar; see api.jobs._sync_log_to_job.
+    total_subscriptions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    subscriptions_processed: Mapped[int] = mapped_column(Integer, default=0)

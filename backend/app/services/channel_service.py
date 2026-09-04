@@ -103,7 +103,11 @@ async def create_manual_channel(
         await session.refresh(existing)
         return existing
 
+    # Both network round-trips happen before any write, so the DB's write
+    # lock is only held for the fast burst of inserts below, not across
+    # these HTTP calls too — see update_service.fetch_quick_sync.
     avatar_url = await avatar_store.store_channel_avatar(http_client, info.id, info.thumbnail_url)
+    quick_result = await update_service.fetch_quick_sync(session, http_client, info.id, settings)
 
     channel = Channel(
         youtube_channel_id=info.id,
@@ -115,7 +119,7 @@ async def create_manual_channel(
     )
     session.add(channel)
     await session.flush()
-    await update_service.run_quick_sync(session, http_client, channel)
+    await update_service.apply_quick_sync(session, channel, quick_result)
     await enqueue_backfill_task(session, channel, settings)
     await set_channel_tags(session, channel, tag_ids)
     await session.commit()

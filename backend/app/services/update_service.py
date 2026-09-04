@@ -15,13 +15,14 @@ extra bookkeeping.
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Channel, UpdateTask
+from app.models import AppSettings, Channel, UpdateTask
 from app.services import key_pool, rss, youtube_client
 from app.services.settings_service import get_or_create_settings
 from app.services.upload_store import upsert_uploads
@@ -74,9 +75,7 @@ async def _fall_back_to_rss(
     task.resume_cursor = None
 
 
-async def process_task(
-    session: AsyncSession, http_client: httpx.AsyncClient, task: UpdateTask, *, max_pages: int | None = None
-) -> None:
+async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, task: UpdateTask) -> None:
     channel = await session.get(Channel, task.channel_id)
     if channel is None:
         task.status = "failed"
@@ -93,7 +92,6 @@ async def process_task(
     task.attempts += 1
     await session.flush()
 
-    pages_fetched = 0
     try:
         while True:
             cursor = task.resume_cursor
@@ -119,7 +117,6 @@ async def process_task(
 
             new_count = await upsert_uploads(session, channel, page.items, fetched_via="api")
             task.fetched_count += new_count
-            pages_fetched += 1
 
             if page.items:
                 oldest_in_page = min(item.published_at for item in page.items)
@@ -135,13 +132,11 @@ async def process_task(
                 task.oldest_fetched_published_at is not None
                 and task.oldest_fetched_published_at <= lookback_cutoff
             )
-            hit_page_limit = max_pages is not None and pages_fetched >= max_pages
 
-            if no_new_uploads or no_more_pages or hit_lookback or hit_page_limit:
+            if no_new_uploads or no_more_pages or hit_lookback:
                 task.status = "completed"
                 task.completed_at = datetime.utcnow()
-                if no_new_uploads or no_more_pages or hit_lookback:
-                    task.resume_cursor = None
+                task.resume_cursor = None
                 break
     except Exception as exc:  # noqa: BLE001 - persisted for the Jobs page, re-raised is not useful here
         task.status = "failed"
@@ -166,11 +161,57 @@ async def run_worker_tick(session: AsyncSession, http_client: httpx.AsyncClient,
     return processed
 
 
-async def run_quick_sync(session: AsyncSession, http_client: httpx.AsyncClient, channel: Channel) -> UpdateTask:
-    """Runs a single-page update synchronously right after a channel is
-    added (manual add or subscription import), so its newest uploads show
-    up immediately instead of waiting for the next worker tick."""
+@dataclass(frozen=True)
+class QuickSyncResult:
+    items: list  # youtube_client.PlaylistItem (via "api") or rss.RssUploadEntry (via "rss")
+    fetched_via: str  # "api" | "rss" | "none" (no key, RSS fallback also disabled/failed)
 
-    task = await enqueue_update_task(session, channel)
-    await process_task(session, http_client, task, max_pages=1)
+
+async def fetch_quick_sync(
+    session: AsyncSession, http_client: httpx.AsyncClient, youtube_channel_id: str, settings: AppSettings
+) -> QuickSyncResult:
+    """Fetches a channel's single newest page of uploads — network only, no
+    Channel/Upload/UpdateTask writes. Deliberately split from
+    `apply_quick_sync` (below) so a caller creating several channels in one
+    batch (see sync_service._import_subscriptions) can run every channel's
+    network round-trip *before* writing anything for it, rather than
+    holding the DB's write lock open across each one's API/RSS call — a
+    lock held that long blocks every other write in the app (settings,
+    tags, manual edits) for the whole batch."""
+
+    playlist_id = youtube_client.uploads_playlist_id_for_channel(youtube_channel_id)
+
+    async def _call(api_key: str) -> youtube_client.Page:
+        return await youtube_client.list_uploads(
+            http_client, api_key, playlist_id, strict_shorts=settings.strict_shorts_detection
+        )
+
+    try:
+        page = await key_pool.call_with_key_rotation(session, _call)
+        return QuickSyncResult(items=page.items, fetched_via="api")
+    except key_pool.QuotaExhaustedError:
+        if not settings.rss_fallback_enabled:
+            return QuickSyncResult(items=[], fetched_via="none")
+        entries = await rss.fetch_uploads_feed(http_client, youtube_channel_id)
+        return QuickSyncResult(items=entries, fetched_via="rss")
+
+
+async def apply_quick_sync(session: AsyncSession, channel: Channel, result: QuickSyncResult) -> UpdateTask:
+    """Persists an already-fetched `QuickSyncResult` as a completed
+    UpdateTask — fast, DB-only, no network — so the channel's newest
+    uploads show up immediately without waiting for the next worker tick."""
+
+    fetched_via = "rss" if result.fetched_via == "rss" else "api"
+    new_count = await upsert_uploads(session, channel, result.items, fetched_via=fetched_via)
+    task = UpdateTask(
+        channel_id=channel.id,
+        status="completed",
+        fetched_count=new_count,
+        used_rss_fallback=result.fetched_via == "rss",
+        started_at=datetime.utcnow(),
+        completed_at=datetime.utcnow(),
+    )
+    session.add(task)
+    channel.last_synced_at = datetime.utcnow()
+    await session.flush()
     return task

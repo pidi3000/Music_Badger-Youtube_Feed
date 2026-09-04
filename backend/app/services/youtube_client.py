@@ -60,6 +60,11 @@ class SubscriptionEntry:
 class Page:
     items: list
     next_page_token: str | None = None
+    # Total items across all pages (YouTube's `pageInfo.totalResults`), only
+    # populated by list_my_subscriptions — used for the subscription import
+    # progress bar, since that's the only list call where the whole result
+    # set is meant to be walked page by page up front.
+    total_results: int | None = None
 
 
 async def _get(
@@ -346,4 +351,5 @@ async def list_my_subscriptions(
         )
         for item in data.get("items", [])
     ]
-    return Page(items=items, next_page_token=data.get("nextPageToken"))
+    total_results = data.get("pageInfo", {}).get("totalResults")
+    return Page(items=items, next_page_token=data.get("nextPageToken"), total_results=total_results)

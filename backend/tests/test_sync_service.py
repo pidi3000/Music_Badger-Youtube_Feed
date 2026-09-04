@@ -134,6 +134,69 @@ async def test_import_subscriptions_commits_per_page_so_progress_is_visible_imme
 
 
 @pytest.mark.asyncio
+async def test_import_subscriptions_commits_each_new_channel_immediately_not_at_page_end(
+    db_session, db_session_factory, monkeypatch
+):
+    """Two new channels land in the *same* subscriptions.list page. Each
+    one needs network round-trips (avatar download, quick-sync fetch)
+    before it can be written — those must never happen while the previous
+    channel's write is still sitting uncommitted, or the DB's write lock
+    stays held for the whole page's worth of network time (this was the
+    actual bug: adding a tag or changing a setting blocked for as long as
+    the first subscription import was running). So the first channel must
+    already be committed and visible elsewhere by the time the second
+    channel's own network fetch starts."""
+
+    settings = await get_or_create_settings(db_session)
+    settings.youtube_refresh_token_encrypted = encrypt("fake-refresh-token")
+    await db_session.commit()
+
+    monkeypatch.setattr(oauth, "refresh_access_token", fake_refresh_access_token)
+
+    async def fake_list_my_subscriptions(client, access_token, page_token=None):
+        return youtube_client.Page(
+            items=[
+                youtube_client.SubscriptionEntry(channel_id="UCfirst", title="First Chan", thumbnail_url=None),
+                youtube_client.SubscriptionEntry(channel_id="UCsecond", title="Second Chan", thumbnail_url=None),
+            ],
+            next_page_token=None,
+            total_results=2,
+        )
+
+    monkeypatch.setattr(youtube_client, "list_my_subscriptions", fake_list_my_subscriptions)
+
+    fetch_calls: list[str] = []
+    visible_before_second_fetch = None
+
+    async def fake_fetch_uploads_feed(client, youtube_channel_id):
+        nonlocal visible_before_second_fetch
+        fetch_calls.append(youtube_channel_id)
+        if youtube_channel_id == "UCsecond":
+            async with db_session_factory() as other_session:
+                result = await other_session.execute(
+                    select(Channel).where(Channel.youtube_channel_id == "UCfirst")
+                )
+                visible_before_second_fetch = result.scalar_one_or_none() is not None
+        return []
+
+    monkeypatch.setattr(rss, "fetch_uploads_feed", fake_fetch_uploads_feed)
+
+    log = SyncLog(status="running")
+    db_session.add(log)
+    await db_session.flush()
+
+    await sync_service.run_sync(db_session, http_client=None, log=log)
+
+    assert fetch_calls == ["UCfirst", "UCsecond"]
+    assert visible_before_second_fetch is True
+
+    await db_session.refresh(log)
+    assert log.channels_added == 2
+    assert log.total_subscriptions == 2
+    assert log.subscriptions_processed == 2
+
+
+@pytest.mark.asyncio
 async def test_import_subscriptions_sets_subscribed_at_and_stores_avatar(db_session, monkeypatch):
     settings = await get_or_create_settings(db_session)
     settings.youtube_refresh_token_encrypted = encrypt("fake-refresh-token")

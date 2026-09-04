@@ -35,10 +35,16 @@ const STATUS_COLORS: Record<string, string> = {
   error: '#ef4444',
 };
 
+const PROGRESS_UNIT: Record<Job['kind'], string> = {
+  backfill: 'uploads',
+  import_subscriptions: 'subscriptions',
+  update: '',
+};
+
 export default function JobRow({ job, onRetryBackfill }: JobRowProps) {
   const canRetry = job.kind === 'backfill' && job.status === 'failed' && job.backfill_task_id !== null;
   const progress =
-    job.kind === 'backfill' && job.target_min_count
+    job.target_min_count != null
       ? Math.min(((job.fetched_count ?? 0) / job.target_min_count) * 100, 100)
       : null;
 
@@ -68,12 +74,12 @@ export default function JobRow({ job, onRetryBackfill }: JobRowProps) {
             <div className="progress-fill" style={{ width: `${progress}%` }} />
           </div>
           <p className="progress-text">
-            {job.fetched_count} / {job.target_min_count} uploads
+            {job.fetched_count} / {job.target_min_count} {PROGRESS_UNIT[job.kind]}
           </p>
         </div>
       )}
 
-      {!progress && job.detail && <p className="job-detail">{job.detail}</p>}
+      {progress === null && job.detail && <p className="job-detail">{job.detail}</p>}
 
       {job.status === 'paused_quota' && (
         <p className="pause-note">Will resume automatically when quota is available.</p>

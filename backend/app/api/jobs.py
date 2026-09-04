@@ -73,6 +73,11 @@ def _sync_log_to_job(log: SyncLog) -> JobOut:
         error=log.error,
         started_at=log.started_at,
         finished_at=log.finished_at,
+        # Reuses the same two fields the backfill progress bar uses — known
+        # as soon as the first subscriptions.list page comes back (YouTube
+        # reports the total up front via pageInfo.totalResults).
+        fetched_count=log.subscriptions_processed if log.total_subscriptions is not None else None,
+        target_min_count=log.total_subscriptions,
     )
 
 

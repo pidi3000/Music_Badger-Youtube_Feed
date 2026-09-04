@@ -72,6 +72,7 @@ export default function SettingsPage() {
         rss_fallback_enabled: rssFallbackEnabled,
         strict_shorts_detection: strictShortsDetection,
       });
+      showSuccess('Settings saved');
     } catch (err) {
       showError(getErrorMessage(err, 'Failed to save settings'));
     }
@@ -243,7 +244,9 @@ export default function SettingsPage() {
                 </div>
               )}
             </div>
-            <button type="submit">Save Settings</button>
+            <button type="submit" disabled={updateSettingsMutation.isPending}>
+              {updateSettingsMutation.isPending ? 'Saving...' : 'Save Settings'}
+            </button>
           </form>
         )}
       </section>

@@ -42,10 +42,21 @@ async def _import_subscriptions(
     settings: AppSettings,
     log: SyncLog,
 ) -> int:
-    """Returns channels_marked_unsubscribed. channels_added is accumulated
-    directly onto `log.channels_added` (and committed) as each page of
-    subscriptions.list results is processed, rather than computed once at
-    the end — see the commit below for why."""
+    """Returns channels_marked_unsubscribed. channels_added and
+    subscriptions_processed are accumulated directly onto `log` (and
+    committed) as each entry is processed, rather than computed once at the
+    end — see the commit below for why.
+
+    Commits happen per *entry*, not per page: a new channel needs two
+    network round-trips (avatar download, quick-sync fetch) before it can
+    be written, and those must never happen while a write from a different
+    channel processed earlier in the same page is still sitting
+    uncommitted — SQLite only allows one writer at a time, so an open
+    write transaction blocks every other write in the app (settings, tags,
+    manual edits) for as long as it's held. Keeping each channel's network
+    work *before* its one fast write-and-commit burst means the lock is
+    only ever held for that instant, never across an HTTP call.
+    """
 
     result = await session.execute(select(Channel))
     local_channels = {c.youtube_channel_id: c for c in result.scalars()}
@@ -54,11 +65,19 @@ async def _import_subscriptions(
     page_token: str | None = None
     while True:
         page = await youtube_client.list_my_subscriptions(http_client, access_token, page_token)
+        if log.total_subscriptions is None and page.total_results is not None:
+            log.total_subscriptions = page.total_results
+            await session.commit()
+
         for entry in page.items:
             remote_channel_ids.add(entry.channel_id)
             local = local_channels.get(entry.channel_id)
             if local is None:
+                # Network round-trips first, no DB write pending yet.
                 avatar_url = await avatar_store.store_channel_avatar(http_client, entry.channel_id, entry.thumbnail_url)
+                quick_result = await update_service.fetch_quick_sync(session, http_client, entry.channel_id, settings)
+
+                # Now the fast write-and-commit burst.
                 new_channel = Channel(
                     youtube_channel_id=entry.channel_id,
                     title=entry.title,
@@ -69,7 +88,7 @@ async def _import_subscriptions(
                 )
                 session.add(new_channel)
                 await session.flush()
-                quick_task = await update_service.run_quick_sync(session, http_client, new_channel)
+                quick_task = await update_service.apply_quick_sync(session, new_channel, quick_result)
                 if quick_task.used_rss_fallback:
                     log.rss_fallback_channels += 1
                 await enqueue_backfill_task(session, new_channel, settings)
@@ -83,15 +102,8 @@ async def _import_subscriptions(
                     local.unsubscribed_at = None
                     local.unsubscribed_ack = False
 
-        # Commit after each page (the YouTube API's own page size, 50
-        # subscriptions per call) instead of accumulating the entire import
-        # in one uncommitted transaction — for a large subscription list,
-        # that meant newly-imported channels (and any avatar downloads
-        # already paid for) stayed invisible to the rest of the app until
-        # the whole import finished, and a mid-import failure lost all of
-        # it. Committing per page makes channels appear in the UI as
-        # they're imported and preserves progress already made either way.
-        await session.commit()
+            log.subscriptions_processed += 1
+            await session.commit()
 
         page_token = page.next_page_token
         if not page_token:

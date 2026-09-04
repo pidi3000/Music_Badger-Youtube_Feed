@@ -759,7 +759,15 @@ async def test_jobs_kind_filter(authed_client, db_session):
 async def test_jobs_shows_a_running_import_with_live_progress_not_as_an_error(authed_client, db_session):
     from app.models import SyncLog
 
-    db_session.add(SyncLog(status="running", channels_added=7, channels_marked_unsubscribed=0))
+    db_session.add(
+        SyncLog(
+            status="running",
+            channels_added=7,
+            channels_marked_unsubscribed=0,
+            total_subscriptions=200,
+            subscriptions_processed=42,
+        )
+    )
     await db_session.commit()
 
     response = await authed_client.get("/api/jobs", params={"kind": "import_subscriptions"})
@@ -768,6 +776,23 @@ async def test_jobs_shows_a_running_import_with_live_progress_not_as_an_error(au
     assert len(body) == 1
     assert body[0]["status"] == "running"
     assert body[0]["detail"] == "7 channels added so far..."
+    # Reuses the backfill progress bar's fields — the frontend renders a
+    # progress bar off of these two whenever target_min_count is present.
+    assert body[0]["fetched_count"] == 42
+    assert body[0]["target_min_count"] == 200
+
+
+@pytest.mark.asyncio
+async def test_jobs_import_has_no_progress_fields_until_the_total_is_known(authed_client, db_session):
+    from app.models import SyncLog
+
+    db_session.add(SyncLog(status="running", channels_added=0, channels_marked_unsubscribed=0))
+    await db_session.commit()
+
+    response = await authed_client.get("/api/jobs", params={"kind": "import_subscriptions"})
+    body = response.json()
+    assert body[0]["fetched_count"] is None
+    assert body[0]["target_min_count"] is None
 
 
 @pytest.mark.asyncio
