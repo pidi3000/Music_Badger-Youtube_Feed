@@ -9,7 +9,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 FetchMethod = Literal["api", "rss"]
-ApiKeyGroup = Literal["background", "active"]
 ApiKeyStatus = Literal["active", "exhausted", "disabled"]
 BackfillStatus = Literal["not_started", "queued", "in_progress", "paused_quota", "completed", "failed"]
 SyncStatus = Literal["running", "success", "error"]
@@ -33,7 +32,8 @@ class AuthStatus(BaseModel):
 class SettingsOut(BaseModel):
     sync_interval_minutes: int
     backfill_worker_interval_seconds: int
-    upload_fetch_method: FetchMethod
+    update_lookback_days: int
+    rss_fallback_enabled: bool
     backfill_days: int
     backfill_min_count: int
     strict_shorts_detection: bool
@@ -44,7 +44,8 @@ class SettingsOut(BaseModel):
 class SettingsUpdate(BaseModel):
     sync_interval_minutes: int | None = Field(default=None, ge=1)
     backfill_worker_interval_seconds: int | None = Field(default=None, ge=10)
-    upload_fetch_method: FetchMethod | None = None
+    update_lookback_days: int | None = Field(default=None, ge=1)
+    rss_fallback_enabled: bool | None = None
     backfill_days: int | None = Field(default=None, ge=1)
     backfill_min_count: int | None = Field(default=None, ge=1)
     strict_shorts_detection: bool | None = None
@@ -89,8 +90,6 @@ class ChannelOut(BaseModel):
     subscription_status: Literal["subscribed", "unsubscribed"]
     unsubscribed_at: datetime | None
     unsubscribed_ack: bool
-    upload_fetch_method: FetchMethod | None
-    effective_fetch_method: FetchMethod
     backfill_completed_at: datetime | None
     backfill_status: BackfillStatus
     upload_count: int
@@ -106,16 +105,10 @@ class ChannelOut(BaseModel):
 class ChannelCreate(BaseModel):
     channel_link: str
     tag_ids: list[int] = Field(default_factory=list)
-    upload_fetch_method: FetchMethod | None = None
 
 
 class ChannelUpdate(BaseModel):
     tag_ids: list[int] | None = None
-    # Distinguishing "omitted" from "explicitly set to null" (clear the
-    # per-channel override, fall back to the global default) requires
-    # checking `model_fields_set` in the router rather than the value
-    # itself — see app.api.channels.update_channel.
-    upload_fetch_method: FetchMethod | None = None
 
 
 # -------------------------------------------------------------- upload ----
@@ -154,7 +147,6 @@ class ApiKeyOut(BaseModel):
 
     id: int
     label: str
-    group: ApiKeyGroup
     status: ApiKeyStatus
     quota_resets_at: datetime | None
     last_used_at: datetime | None
@@ -163,13 +155,11 @@ class ApiKeyOut(BaseModel):
 
 class ApiKeyCreate(BaseModel):
     label: str
-    group: ApiKeyGroup
     key_value: str
 
 
 class ApiKeyUpdate(BaseModel):
     label: str | None = None
-    group: ApiKeyGroup | None = None
     status: Literal["active", "disabled"] | None = None
 
 
@@ -214,7 +204,7 @@ class SyncStatusOut(BaseModel):
 
 
 # ------------------------------------------------------------------ jobs --
-JobKind = Literal["backfill", "sync_api", "sync_rss", "import_subscriptions"]
+JobKind = Literal["update", "backfill", "import_subscriptions"]
 
 
 class JobOut(BaseModel):

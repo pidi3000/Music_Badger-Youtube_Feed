@@ -8,38 +8,32 @@ from app.models import ApiKey
 from app.services import key_pool
 
 
-def make_key(group: str, label: str, status: str = "active") -> ApiKey:
-    return ApiKey(label=label, group=group, key_value_encrypted=encrypt(f"secret-{label}"), status=status)
+def make_key(label: str, status: str = "active") -> ApiKey:
+    return ApiKey(label=label, key_value_encrypted=encrypt(f"secret-{label}"), status=status)
 
 
 @pytest.mark.asyncio
-async def test_get_active_key_respects_group(db_session):
-    db_session.add_all(
-        [
-            make_key("background", "bg-1"),
-            make_key("active", "active-1"),
-        ]
-    )
+async def test_get_active_key_returns_least_recently_used(db_session):
+    older = make_key("k1")
+    older.last_used_at = datetime.utcnow() - timedelta(hours=1)
+    newer = make_key("k2")
+    newer.last_used_at = datetime.utcnow()
+    db_session.add_all([newer, older])
     await db_session.commit()
 
-    bg_key = await key_pool.get_active_key(db_session, "background")
-    active_key = await key_pool.get_active_key(db_session, "active")
+    key = await key_pool.get_active_key(db_session)
 
-    assert bg_key.label == "bg-1"
-    assert active_key.label == "active-1"
+    assert key.label == "k1"
 
 
 @pytest.mark.asyncio
-async def test_get_active_key_returns_none_when_group_empty(db_session):
-    db_session.add(make_key("active", "active-1"))
-    await db_session.commit()
-
-    assert await key_pool.get_active_key(db_session, "background") is None
+async def test_get_active_key_returns_none_when_pool_empty(db_session):
+    assert await key_pool.get_active_key(db_session) is None
 
 
 @pytest.mark.asyncio
 async def test_call_with_key_rotation_rotates_on_quota_exceeded(db_session):
-    db_session.add_all([make_key("background", "bg-1"), make_key("background", "bg-2")])
+    db_session.add_all([make_key("k1"), make_key("k2")])
     await db_session.commit()
 
     calls: list[str] = []
@@ -50,7 +44,7 @@ async def test_call_with_key_rotation_rotates_on_quota_exceeded(db_session):
             raise key_pool.YoutubeQuotaExceeded("quotaExceeded")
         return "ok"
 
-    result = await key_pool.call_with_key_rotation(db_session, "background", call)
+    result = await key_pool.call_with_key_rotation(db_session, call)
 
     assert result == "ok"
     assert len(calls) == 2
@@ -62,47 +56,47 @@ async def test_call_with_key_rotation_rotates_on_quota_exceeded(db_session):
 
 @pytest.mark.asyncio
 async def test_call_with_key_rotation_raises_when_all_keys_exhausted(db_session):
-    db_session.add(make_key("background", "bg-1"))
+    db_session.add(make_key("k1"))
     await db_session.commit()
 
     async def always_quota_exceeded(api_key: str) -> str:
         raise key_pool.YoutubeQuotaExceeded("quotaExceeded")
 
     with pytest.raises(key_pool.QuotaExhaustedError):
-        await key_pool.call_with_key_rotation(db_session, "background", always_quota_exceeded)
+        await key_pool.call_with_key_rotation(db_session, always_quota_exceeded)
 
 
 @pytest.mark.asyncio
-async def test_call_with_key_rotation_raises_when_group_has_no_keys(db_session):
+async def test_call_with_key_rotation_raises_when_no_keys(db_session):
     async def call(api_key: str) -> str:
         return "unused"
 
     with pytest.raises(key_pool.QuotaExhaustedError):
-        await key_pool.call_with_key_rotation(db_session, "active", call)
+        await key_pool.call_with_key_rotation(db_session, call)
 
 
 @pytest.mark.asyncio
 async def test_reactivation_after_quota_reset_time_passes(db_session):
-    key = make_key("background", "bg-1", status="exhausted")
+    key = make_key("k1", status="exhausted")
     key.quota_resets_at = datetime.utcnow() - timedelta(minutes=1)
     db_session.add(key)
     await db_session.commit()
 
-    active_key = await key_pool.get_active_key(db_session, "background")
+    active_key = await key_pool.get_active_key(db_session)
 
     assert active_key is not None
-    assert active_key.label == "bg-1"
+    assert active_key.label == "k1"
     assert active_key.status == "active"
 
 
 @pytest.mark.asyncio
 async def test_not_yet_reactivated_before_reset_time(db_session):
-    key = make_key("background", "bg-1", status="exhausted")
+    key = make_key("k1", status="exhausted")
     key.quota_resets_at = datetime.utcnow() + timedelta(hours=1)
     db_session.add(key)
     await db_session.commit()
 
-    assert await key_pool.get_active_key(db_session, "background") is None
+    assert await key_pool.get_active_key(db_session) is None
 
 
 def test_next_quota_reset_is_midnight_pacific_converted_to_utc():

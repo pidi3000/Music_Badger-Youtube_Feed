@@ -8,10 +8,9 @@ interface JobRowProps {
 }
 
 const KIND_LABELS: Record<Job['kind'], string> = {
-  backfill: 'Backfill',
-  sync_api: 'Load uploads (API)',
-  sync_rss: 'Load uploads (RSS)',
-  import_subscriptions: 'Import subscriptions',
+  update: 'Upload update',
+  backfill: 'Upload backfill',
+  import_subscriptions: 'Subscription update',
 };
 
 const STATUS_LABELS: Record<string, string> = {

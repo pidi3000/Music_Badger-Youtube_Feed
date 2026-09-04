@@ -1,6 +1,6 @@
-"""Manual channel add (resolve by video/ID/handle, using the **active** key
-group so it stays fast regardless of background sync/backfill load — see
-PROJECT_OUTLINE.md §6) plus shared Channel <-> ChannelOut conversion.
+"""Manual channel add (resolve by video/ID/handle via the shared API key
+pool — see PROJECT_OUTLINE.md §6) plus shared Channel <-> ChannelOut
+conversion.
 """
 
 from dataclasses import dataclass
@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models import AppSettings, Channel, ChannelTag, Tag, Upload
 from app.schemas import ChannelOut, ChannelRef, TagOut
-from app.services import avatar_store, key_pool, youtube_client
+from app.services import avatar_store, key_pool, update_service, youtube_client
 from app.services.backfill_service import enqueue_backfill_task
 from app.services.channel_parser import ChannelLinkParseError, parse_channel_link
 
@@ -36,28 +36,28 @@ async def _resolve_channel_info(
         async def _resolve_id(api_key: str) -> str | None:
             return await youtube_client.resolve_channel_id_by_video(http_client, api_key, parsed.value)
 
-        channel_id = await key_pool.call_with_key_rotation(session, "active", _resolve_id)
+        channel_id = await key_pool.call_with_key_rotation(session, _resolve_id)
         if channel_id is None:
             raise ChannelResolveError(f"no YouTube video found for id '{parsed.value}'")
 
         async def _get(api_key: str) -> youtube_client.ChannelInfo | None:
             return await youtube_client.get_channel(http_client, api_key, channel_id)
 
-        info = await key_pool.call_with_key_rotation(session, "active", _get)
+        info = await key_pool.call_with_key_rotation(session, _get)
 
     elif parsed.kind == "channel_id":
 
         async def _get(api_key: str) -> youtube_client.ChannelInfo | None:
             return await youtube_client.get_channel(http_client, api_key, parsed.value)
 
-        info = await key_pool.call_with_key_rotation(session, "active", _get)
+        info = await key_pool.call_with_key_rotation(session, _get)
 
     else:  # handle
 
         async def _resolve_handle(api_key: str) -> youtube_client.ChannelInfo | None:
             return await youtube_client.resolve_channel_by_handle(http_client, api_key, parsed.value)
 
-        info = await key_pool.call_with_key_rotation(session, "active", _resolve_handle)
+        info = await key_pool.call_with_key_rotation(session, _resolve_handle)
 
     if info is None:
         raise ChannelResolveError(f"could not resolve a YouTube channel from '{channel_link}'")
@@ -87,7 +87,6 @@ async def create_manual_channel(
     settings: AppSettings,
     channel_link: str,
     tag_ids: list[int],
-    upload_fetch_method: str | None = None,
 ) -> Channel:
     info = await _resolve_channel_info(session, http_client, channel_link)
 
@@ -113,10 +112,10 @@ async def create_manual_channel(
         thumbnail_url=avatar_url or info.thumbnail_url,
         source="manual",
         subscription_status="subscribed",
-        upload_fetch_method=upload_fetch_method,
     )
     session.add(channel)
     await session.flush()
+    await update_service.run_quick_sync(session, http_client, channel)
     await enqueue_backfill_task(session, channel, settings)
     await set_channel_tags(session, channel, tag_ids)
     await session.commit()
@@ -176,7 +175,7 @@ def _backfill_status(channel: Channel) -> str:
     return latest.status
 
 
-def channel_to_out(channel: Channel, settings: AppSettings, stats: UploadStats = UploadStats()) -> ChannelOut:
+def channel_to_out(channel: Channel, stats: UploadStats = UploadStats()) -> ChannelOut:
     return ChannelOut(
         id=channel.id,
         youtube_channel_id=channel.youtube_channel_id,
@@ -187,8 +186,6 @@ def channel_to_out(channel: Channel, settings: AppSettings, stats: UploadStats =
         subscription_status=channel.subscription_status,
         unsubscribed_at=channel.unsubscribed_at,
         unsubscribed_ack=channel.unsubscribed_ack,
-        upload_fetch_method=channel.upload_fetch_method,
-        effective_fetch_method=channel.upload_fetch_method or settings.upload_fetch_method,
         backfill_completed_at=channel.backfill_completed_at,
         backfill_status=_backfill_status(channel),
         upload_count=stats.count,

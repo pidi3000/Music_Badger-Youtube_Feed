@@ -1,8 +1,13 @@
-"""Subscription import + unsubscribe detection + incremental upload sync.
-PROJECT_OUTLINE.md §5 (unsubscribe handling) and §6 (RSS fallback).
+"""Subscription import + unsubscribe detection + per-channel update-task
+enqueueing. PROJECT_OUTLINE.md §5 (unsubscribe handling) and §6 (RSS
+fallback).
 
-Runs on the scheduler (background key group only — see app.scheduler) or
-on-demand via POST /api/sync, which uses the same code path.
+Runs on the scheduler (see app.scheduler) or on-demand via POST /api/sync,
+which uses the same code path. The actual upload fetching for existing
+channels happens asynchronously afterward, via the UpdateTask queue
+processed by app.services.job_worker — this module only detects what needs
+updating and enqueues it, plus runs an immediate one-page "quick sync" for
+newly-imported channels so their newest uploads show up right away.
 """
 
 import logging
@@ -14,10 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.encryption import decrypt
 from app.models import AppSettings, Channel, SyncLog
-from app.services import avatar_store, job_service, key_pool, oauth, rss, youtube_client
+from app.services import avatar_store, oauth, update_service, youtube_client
 from app.services.backfill_service import enqueue_backfill_task
 from app.services.settings_service import get_or_create_settings
-from app.services.upload_store import upsert_uploads
 from app.config import get_config
 
 logger = logging.getLogger(__name__)
@@ -65,6 +69,9 @@ async def _import_subscriptions(
                 )
                 session.add(new_channel)
                 await session.flush()
+                quick_task = await update_service.run_quick_sync(session, http_client, new_channel)
+                if quick_task.used_rss_fallback:
+                    log.rss_fallback_channels += 1
                 await enqueue_backfill_task(session, new_channel, settings)
                 local_channels[entry.channel_id] = new_channel
                 log.channels_added += 1
@@ -107,69 +114,6 @@ async def _import_subscriptions(
     return channels_unsubscribed
 
 
-async def _sync_channel_uploads(
-    session: AsyncSession,
-    http_client: httpx.AsyncClient,
-    channel: Channel,
-    settings: AppSettings,
-) -> bool:
-    """Fetches new uploads for one already-backfilled channel. Returns True
-    if it fell back to RSS due to background-key exhaustion."""
-
-    method = channel.upload_fetch_method or settings.upload_fetch_method
-    fell_back = False
-
-    if method == "api":
-        try:
-            await _sync_channel_uploads_via_api(session, http_client, channel, settings)
-        except key_pool.QuotaExhaustedError:
-            fell_back = True
-            await _sync_channel_uploads_via_rss(session, http_client, channel)
-    else:
-        await _sync_channel_uploads_via_rss(session, http_client, channel)
-
-    channel.last_synced_at = datetime.utcnow()
-    await session.flush()
-    return fell_back
-
-
-async def _sync_channel_uploads_via_api(
-    session: AsyncSession, http_client: httpx.AsyncClient, channel: Channel, settings: AppSettings
-) -> int:
-    job = await job_service.start_channel_sync_job(session, channel, "api")
-    try:
-        playlist_id = youtube_client.uploads_playlist_id_for_channel(channel.youtube_channel_id)
-
-        async def _call(api_key: str) -> youtube_client.Page:
-            return await youtube_client.list_uploads(
-                http_client, api_key, playlist_id, strict_shorts=settings.strict_shorts_detection
-            )
-
-        page = await key_pool.call_with_key_rotation(session, "background", _call)
-        # The uploads playlist is newest-first: stop as soon as a page yields no
-        # new rows, rather than paginating the channel's whole history again.
-        new_count = await upsert_uploads(session, channel, page.items, fetched_via="api")
-    except Exception as exc:  # noqa: BLE001 - recorded on the job, then re-raised for the caller's own handling
-        await job_service.finish_channel_sync_job(session, job, error=str(exc))
-        raise
-    await job_service.finish_channel_sync_job(session, job, new_uploads_count=new_count)
-    return new_count
-
-
-async def _sync_channel_uploads_via_rss(
-    session: AsyncSession, http_client: httpx.AsyncClient, channel: Channel
-) -> int:
-    job = await job_service.start_channel_sync_job(session, channel, "rss")
-    try:
-        entries = await rss.fetch_uploads_feed(http_client, channel.youtube_channel_id)
-        new_count = await upsert_uploads(session, channel, entries, fetched_via="rss")
-    except Exception as exc:  # noqa: BLE001 - recorded on the job, then re-raised for the caller's own handling
-        await job_service.finish_channel_sync_job(session, job, error=str(exc))
-        raise
-    await job_service.finish_channel_sync_job(session, job, new_uploads_count=new_count)
-    return new_count
-
-
 async def run_sync(session: AsyncSession, http_client: httpx.AsyncClient, log: SyncLog) -> SyncLog:
     """Runs a sync into an existing (already-persisted) SyncLog row. See
     `create_and_run_sync` for the common case of creating one too."""
@@ -184,36 +128,23 @@ async def run_sync(session: AsyncSession, http_client: httpx.AsyncClient, log: S
                 session, http_client, access_token, settings, log
             )
 
-        # Every channel gets an incremental "what's new" sync each cycle,
-        # regardless of whether its initial backfill has finished — not
-        # gated on backfill_completed_at. Backfilling deep history and
-        # picking up recent uploads are independent concerns: gating the
-        # latter on the former meant a channel showed zero uploads for as
-        # long as its backfill hadn't completed, which for an RSS-configured
-        # channel with no "background"-group key (backfill always runs via
-        # the API, never RSS) meant forever. upsert_uploads is idempotent,
-        # so this and the backfill queue can safely both touch the same
-        # channel's uploads without duplicating anything.
-        #
-        # Each channel is synced in its own try/except: one channel's
-        # failure (a genuinely broken feed, an unexpected API error) must
-        # not abort every other channel still queued for this cycle, nor
-        # discard the channels_added/channels_marked_unsubscribed count
-        # already recorded above.
+        # Every channel gets an incremental "what's new" update task enqueued
+        # each cycle, regardless of whether its initial backfill has
+        # finished — not gated on backfill_completed_at. Backfilling deep
+        # history and picking up recent uploads are independent concerns:
+        # gating the latter on the former meant a channel showed zero
+        # uploads for as long as its backfill hadn't completed.
+        # upsert_uploads is idempotent, so the update queue and the backfill
+        # queue can safely both touch the same channel's uploads without
+        # duplicating anything. The tasks themselves are processed
+        # separately by app.services.job_worker, not here — this only
+        # enqueues.
         result = await session.execute(select(Channel))
-        errors: list[str] = []
         for channel in result.scalars():
-            try:
-                fell_back = await _sync_channel_uploads(session, http_client, channel, settings)
-            except Exception as exc:  # noqa: BLE001 - isolated per channel, recorded below
-                errors.append(f"{channel.title} ({channel.youtube_channel_id}): {exc}")
-                logger.exception("sync failed for channel %s", channel.youtube_channel_id)
-                continue
-            if fell_back:
-                log.rss_fallback_channels += 1
+            await update_service.enqueue_update_task_if_needed(session, channel)
 
-        log.status = "error" if errors else "success"
-        log.error = "; ".join(errors) or None
+        log.status = "success"
+        log.error = None
     except Exception as exc:  # noqa: BLE001 - recorded on the log for the UI/API
         log.status = "error"
         log.error = str(exc)

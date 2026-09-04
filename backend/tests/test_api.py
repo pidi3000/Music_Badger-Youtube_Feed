@@ -62,7 +62,7 @@ async def test_tags_crud(authed_client):
 
 @pytest.mark.asyncio
 async def test_add_channel_by_handle(authed_client, db_session, monkeypatch):
-    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     await db_session.commit()
 
     async def fake_resolve_by_handle(client, api_key, handle):
@@ -71,6 +71,11 @@ async def test_add_channel_by_handle(authed_client, db_session, monkeypatch):
         )
 
     monkeypatch.setattr(youtube_client, "resolve_channel_by_handle", fake_resolve_by_handle)
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        return youtube_client.Page(items=[], next_page_token=None)
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
 
     response = await authed_client.post("/api/channels", json={"channel_link": "@testchan", "tag_ids": []})
     assert response.status_code == 201
@@ -85,7 +90,7 @@ async def test_add_channel_by_handle(authed_client, db_session, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_add_channel_stores_avatar_locally_instead_of_hotlinking(authed_client, db_session, monkeypatch):
-    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     await db_session.commit()
 
     async def fake_resolve_by_handle(client, api_key, handle):
@@ -104,60 +109,45 @@ async def test_add_channel_stores_avatar_locally_instead_of_hotlinking(authed_cl
 
     monkeypatch.setattr(channel_service.avatar_store, "store_channel_avatar", fake_store_channel_avatar)
 
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        return youtube_client.Page(items=[], next_page_token=None)
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
     response = await authed_client.post("/api/channels", json={"channel_link": "@avatarchan", "tag_ids": []})
     assert response.status_code == 201
     assert response.json()["thumbnail_url"] == "/media/avatars/UCavatar1.jpg"
 
 
 @pytest.mark.asyncio
-async def test_add_channel_with_explicit_fetch_method(authed_client, db_session, monkeypatch):
-    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+async def test_add_channel_quick_syncs_newest_uploads_immediately(authed_client, db_session, monkeypatch):
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     await db_session.commit()
 
     async def fake_resolve_by_handle(client, api_key, handle):
-        return youtube_client.ChannelInfo(id="UCrsschannel1", title="RSS Channel", thumbnail_url=None, handle=handle)
+        return youtube_client.ChannelInfo(id="UCquick1", title="Quick Channel", thumbnail_url=None, handle=handle)
 
     monkeypatch.setattr(youtube_client, "resolve_channel_by_handle", fake_resolve_by_handle)
 
-    response = await authed_client.post(
-        "/api/channels", json={"channel_link": "@rsschan", "tag_ids": [], "upload_fetch_method": "rss"}
-    )
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        return youtube_client.Page(
+            items=[
+                youtube_client.PlaylistItem(video_id="qv1", title="t", published_at=datetime.utcnow(), thumbnail_url=None)
+            ],
+            next_page_token=None,
+        )
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    response = await authed_client.post("/api/channels", json={"channel_link": "@quickchan", "tag_ids": []})
     assert response.status_code == 201
     body = response.json()
-    assert body["upload_fetch_method"] == "rss"
-    assert body["effective_fetch_method"] == "rss"
-
-
-@pytest.mark.asyncio
-async def test_channel_fetch_method_override_can_be_cleared_with_explicit_null(authed_client, db_session):
-    channel = Channel(youtube_channel_id="UCoverride1", title="Override Chan", source="manual")
-    db_session.add(channel)
-    await db_session.commit()
-    await db_session.refresh(channel)
-
-    set_override = await authed_client.patch(
-        f"/api/channels/{channel.id}", json={"upload_fetch_method": "rss"}
-    )
-    assert set_override.status_code == 200
-    assert set_override.json()["upload_fetch_method"] == "rss"
-    assert set_override.json()["effective_fetch_method"] == "rss"
-
-    # omitting the field entirely must leave the override untouched
-    unrelated_patch = await authed_client.patch(f"/api/channels/{channel.id}", json={"tag_ids": []})
-    assert unrelated_patch.json()["upload_fetch_method"] == "rss"
-
-    # an explicit null clears the override back to the global default ("api")
-    cleared = await authed_client.patch(
-        f"/api/channels/{channel.id}", json={"upload_fetch_method": None}
-    )
-    assert cleared.status_code == 200
-    assert cleared.json()["upload_fetch_method"] is None
-    assert cleared.json()["effective_fetch_method"] == "api"
+    assert body["upload_count"] == 1
 
 
 @pytest.mark.asyncio
 async def test_add_channel_with_unparseable_link_returns_400(authed_client, db_session):
-    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     await db_session.commit()
 
     response = await authed_client.post("/api/channels", json={"channel_link": "@ab", "tag_ids": []})
@@ -309,17 +299,19 @@ async def test_settings_get_and_patch(authed_client):
     initial = await authed_client.get("/api/settings")
     assert initial.status_code == 200
     body = initial.json()
-    assert body["upload_fetch_method"] == "api"
+    assert body["update_lookback_days"] == 30
+    assert body["rss_fallback_enabled"] is True
     assert body["backfill_days"] == 365
     assert body["backfill_min_count"] == 50
     assert body["strict_shorts_detection"] is False
 
     updated = await authed_client.patch(
-        "/api/settings", json={"upload_fetch_method": "rss", "backfill_min_count": 10}
+        "/api/settings", json={"update_lookback_days": 14, "rss_fallback_enabled": False, "backfill_min_count": 10}
     )
     assert updated.status_code == 200
     updated_body = updated.json()
-    assert updated_body["upload_fetch_method"] == "rss"
+    assert updated_body["update_lookback_days"] == 14
+    assert updated_body["rss_fallback_enabled"] is False
     assert updated_body["backfill_min_count"] == 10
     assert updated_body["backfill_days"] == 365
     assert updated_body["sync_interval_minutes"] == 30
@@ -348,7 +340,7 @@ async def test_rescan_shorts_endpoint(authed_client, db_session, monkeypatch):
     channel = Channel(youtube_channel_id="UCrescan1", title="Rescan Chan", source="manual")
     db_session.add(channel)
     await db_session.flush()
-    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     db_session.add(
         Upload(
             channel_id=channel.id,
@@ -428,7 +420,7 @@ async def test_settings_interval_update_live_reschedules_the_scheduler_jobs(app,
 @pytest.mark.asyncio
 async def test_api_keys_crud_never_exposes_raw_value(authed_client):
     created = await authed_client.post(
-        "/api/api-keys", json={"label": "My Key", "group": "background", "key_value": "super-secret-value"}
+        "/api/api-keys", json={"label": "My Key", "key_value": "super-secret-value"}
     )
     assert created.status_code == 201
     body = created.json()
@@ -652,7 +644,7 @@ async def test_backfill_tasks_list_and_retry(authed_client, db_session, monkeypa
     channel = Channel(youtube_channel_id="UCretry1", title="Retry Chan", source="manual")
     db_session.add(channel)
     await db_session.flush()
-    db_session.add(ApiKey(label="bg-1", group="background", key_value_encrypted=encrypt("k")))
+    db_session.add(ApiKey(label="bg-1", key_value_encrypted=encrypt("k")))
     await db_session.flush()
 
     task = BackfillTask(
@@ -680,8 +672,8 @@ async def test_backfill_tasks_list_and_retry(authed_client, db_session, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_jobs_unifies_backfill_sync_jobs_and_import(authed_client, db_session):
-    from app.models import ChannelSyncJob, SyncLog
+async def test_jobs_unifies_backfill_update_and_import(authed_client, db_session):
+    from app.models import SyncLog, UpdateTask
 
     channel = Channel(youtube_channel_id="UCjobsapi1", title="Jobs API Chan", source="manual")
     db_session.add(channel)
@@ -700,13 +692,13 @@ async def test_jobs_unifies_backfill_sync_jobs_and_import(authed_client, db_sess
         )
     )
     db_session.add(
-        ChannelSyncJob(
+        UpdateTask(
             channel_id=channel.id,
-            method="rss",
-            status="success",
-            new_uploads_count=3,
+            status="completed",
+            fetched_count=3,
+            used_rss_fallback=True,
             started_at=now,
-            finished_at=now,
+            completed_at=now,
         )
     )
     db_session.add(
@@ -725,7 +717,7 @@ async def test_jobs_unifies_backfill_sync_jobs_and_import(authed_client, db_sess
     body = response.json()
 
     kinds = {job["kind"] for job in body}
-    assert kinds == {"backfill", "sync_rss", "import_subscriptions"}
+    assert kinds == {"backfill", "update", "import_subscriptions"}
 
     backfill_job = next(j for j in body if j["kind"] == "backfill")
     assert backfill_job["channel"]["title"] == "Jobs API Chan"
@@ -733,13 +725,34 @@ async def test_jobs_unifies_backfill_sync_jobs_and_import(authed_client, db_sess
     assert backfill_job["target_min_count"] == 50
     assert backfill_job["backfill_task_id"] is not None
 
-    sync_job = next(j for j in body if j["kind"] == "sync_rss")
-    assert sync_job["channel"]["title"] == "Jobs API Chan"
-    assert sync_job["detail"] == "3 new uploads"
+    update_job = next(j for j in body if j["kind"] == "update")
+    assert update_job["channel"]["title"] == "Jobs API Chan"
+    assert update_job["detail"] == "3 new uploads via RSS"
 
     import_job = next(j for j in body if j["kind"] == "import_subscriptions")
     assert import_job["channel"] is None
     assert import_job["detail"] == "2 added, 1 unsubscribed"
+
+
+@pytest.mark.asyncio
+async def test_jobs_kind_filter(authed_client, db_session):
+    from app.models import SyncLog, UpdateTask
+
+    channel = Channel(youtube_channel_id="UCjobsfilter1", title="Filter Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+
+    now = datetime.utcnow()
+    db_session.add(BackfillTask(channel_id=channel.id, status="queued", target_min_count=50, target_after=now.date()))
+    db_session.add(UpdateTask(channel_id=channel.id, status="queued"))
+    db_session.add(SyncLog(status="success", started_at=now, finished_at=now))
+    await db_session.commit()
+
+    response = await authed_client.get("/api/jobs", params={"kind": "update"})
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["kind"] == "update"
 
 
 @pytest.mark.asyncio

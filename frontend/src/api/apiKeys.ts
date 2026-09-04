@@ -4,7 +4,6 @@ import { apiCall } from './client';
 export interface ApiKey {
   id: number;
   label: string;
-  group: 'background' | 'active';
   status: 'active' | 'exhausted' | 'disabled';
   quota_resets_at: string | null;
   last_used_at: string | null;
@@ -15,11 +14,7 @@ export async function getApiKeys(): Promise<ApiKey[]> {
   return apiCall<ApiKey[]>('/api/api-keys');
 }
 
-export async function createApiKey(payload: {
-  label: string;
-  group: 'background' | 'active';
-  key_value: string;
-}): Promise<ApiKey> {
+export async function createApiKey(payload: { label: string; key_value: string }): Promise<ApiKey> {
   return apiCall('/api/api-keys', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -28,11 +23,7 @@ export async function createApiKey(payload: {
 
 export async function updateApiKey(
   id: number,
-  payload: Partial<{
-    label: string;
-    group: 'background' | 'active';
-    status: 'active' | 'disabled';
-  }>,
+  payload: Partial<{ label: string; status: 'active' | 'disabled' }>,
 ): Promise<ApiKey> {
   return apiCall(`/api/api-keys/${id}`, {
     method: 'PATCH',
@@ -66,13 +57,8 @@ export function useCreateApiKey() {
 export function useUpdateApiKey() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      id,
-      payload,
-    }: {
-      id: number;
-      payload: Partial<{ label: string; group: 'background' | 'active'; status: 'active' | 'disabled' }>;
-    }) => updateApiKey(id, payload),
+    mutationFn: ({ id, payload }: { id: number; payload: Partial<{ label: string; status: 'active' | 'disabled' }> }) =>
+      updateApiKey(id, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['api-keys'] });
     },

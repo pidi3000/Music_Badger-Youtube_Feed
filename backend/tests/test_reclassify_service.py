@@ -38,7 +38,7 @@ def make_upload(
 @pytest.mark.asyncio
 async def test_rescan_only_touches_unverified_uploads_within_the_window(db_session, monkeypatch):
     channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
 
     now = datetime.utcnow()
     recent_unverified = make_upload(channel.id, "recent-unverified", now - timedelta(days=1))
@@ -94,7 +94,7 @@ async def test_rescan_with_nothing_eligible_makes_no_api_call(db_session, monkey
 @pytest.mark.asyncio
 async def test_rescan_marks_verified_even_when_type_is_unchanged(db_session, monkeypatch):
     channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     upload = make_upload(channel.id, "vid1", datetime.utcnow() - timedelta(hours=1), video_type="video")
     db_session.add(upload)
     await db_session.commit()
@@ -120,7 +120,7 @@ async def test_rescan_leaves_ids_missing_from_the_response_untouched(db_session,
     it must stay unverified (eligible for a future retry) rather than
     crash or get silently marked verified."""
     channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     upload = make_upload(channel.id, "deleted-vid", datetime.utcnow() - timedelta(hours=1))
     db_session.add(upload)
     await db_session.commit()
@@ -142,7 +142,7 @@ async def test_rescan_leaves_ids_missing_from_the_response_untouched(db_session,
 @pytest.mark.asyncio
 async def test_rescan_batches_over_fifty_ids(db_session, monkeypatch):
     channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     now = datetime.utcnow()
     uploads = [make_upload(channel.id, f"vid{i}", now - timedelta(minutes=i)) for i in range(60)]
     db_session.add_all(uploads)
@@ -180,7 +180,7 @@ async def test_rescan_commits_progress_before_a_later_batch_fails(db_session, mo
     must stay saved rather than being rolled back — the caller can just
     rescan again later."""
     channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="active-1", group="active", key_value_encrypted=encrypt("k")))
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     now = datetime.utcnow()
     uploads = [make_upload(channel.id, f"vid{i}", now - timedelta(minutes=i)) for i in range(60)]
     db_session.add_all(uploads)
@@ -192,14 +192,14 @@ async def test_rescan_commits_progress_before_a_later_batch_fails(db_session, mo
         nonlocal call_count
         call_count += 1
         if call_count == 2:
-            raise key_pool.QuotaExhaustedError("active")
+            raise key_pool.QuotaExhaustedError()
         return {vid: youtube_client.VideoClassification("short", verified=True) for vid in video_ids}
 
     monkeypatch.setattr(youtube_client, "classify_video_types", fake_classify_video_types)
     monkeypatch.setattr(
         key_pool,
         "call_with_key_rotation",
-        lambda session, group, call: call("fake-key"),
+        lambda session, call: call("fake-key"),
     )
 
     with pytest.raises(key_pool.QuotaExhaustedError):

@@ -37,9 +37,20 @@ class AppSettings(Base):
 
     access_secret_hash: Mapped[str] = mapped_column(String(255))
 
-    upload_fetch_method: Mapped[str] = mapped_column(String(8), default="api")
     backfill_days: Mapped[int] = mapped_column(Integer, default=365)
     backfill_min_count: Mapped[int] = mapped_column(Integer, default=50)
+
+    # How many days back an incremental update keeps paginating a channel's
+    # uploads playlist looking for new videos, before giving up for this run
+    # (mirrors BackfillTask.target_after but is independently configurable —
+    # updates are meant to be quick, backfill is meant to be thorough).
+    update_lookback_days: Mapped[int] = mapped_column(Integer, default=30)
+
+    # When every API key is exhausted, fall back to RSS for updates (fewer
+    # items, no Shorts/Live classification) instead of stalling. Channels
+    # updated this way are re-checked via the API on the next run once quota
+    # is available again — see app.services.update_service.
+    rss_fallback_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # Off by default: when on, any upload of 3 minutes or less gets an extra,
     # unofficial check (app.services.youtube_client._is_actual_short) to
@@ -87,9 +98,6 @@ class Channel(Base):
     # snippet.publishedAt), set on subscription import. Null for
     # manual-only channels, which have no such date.
     subscribed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    # Per-channel override of AppSettings.upload_fetch_method. Null = use default.
-    upload_fetch_method: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
     backfill_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -161,8 +169,6 @@ class ApiKey(Base):
     label: Mapped[str] = mapped_column(String(255))
     key_value_encrypted: Mapped[str] = mapped_column(Text)
 
-    # "background" | "active"
-    group: Mapped[str] = mapped_column(String(16))
     # "active" | "exhausted" | "disabled"
     status: Mapped[str] = mapped_column(String(16), default="active")
 
@@ -199,27 +205,39 @@ class BackfillTask(Base):
     channel: Mapped["Channel"] = relationship(back_populates="backfill_tasks")
 
 
-class ChannelSyncJob(Base):
-    """Latest per-channel incremental upload sync attempt (API or RSS) —
-    bounded to one row per channel (upserted on each attempt, not a full
-    history log) so the Jobs page can show live status without unbounded
-    growth. See app.services.job_service and api.jobs."""
+class UpdateTask(Base):
+    """Resumable per-channel incremental upload sync task — mirrors
+    BackfillTask's lifecycle (queued/in_progress/paused_quota/completed/
+    failed with a resume_cursor for pagination continuation across quota
+    pauses) but paginates only until a page yields no new uploads or the
+    oldest fetched upload crosses AppSettings.update_lookback_days, rather
+    than backfill's much deeper target. See app.services.update_service."""
 
-    __tablename__ = "channel_sync_jobs"
-    __table_args__ = (UniqueConstraint("channel_id", name="uq_channel_sync_job_channel"),)
+    __tablename__ = "update_tasks"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id", ondelete="CASCADE"), index=True)
 
-    # "api" | "rss" — which method this attempt used.
-    method: Mapped[str] = mapped_column(String(8))
-    # "running" | "success" | "error"
-    status: Mapped[str] = mapped_column(String(16), default="running")
-    new_uploads_count: Mapped[int] = mapped_column(Integer, default=0)
-    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # "queued" | "in_progress" | "paused_quota" | "completed" | "failed"
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
 
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    fetched_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Opaque pagination resume point (a YouTube pageToken).
+    resume_cursor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    oldest_fetched_published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # True once this run has fallen back to RSS because every API key was
+    # exhausted — flags the channel to be rechecked via the API on the next
+    # update once quota is available again.
+    used_rss_fallback: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     channel: Mapped["Channel"] = relationship()
 

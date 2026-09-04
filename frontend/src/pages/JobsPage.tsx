@@ -1,4 +1,5 @@
-import { useJobs, Job } from '../api/jobs';
+import { useState } from 'react';
+import { useJobs, Job, JobKind } from '../api/jobs';
 import { useRetryBackfillTask } from '../api/backfill';
 import { useToast } from '../context/ToastContext';
 import { getErrorMessage } from '../utils/errors';
@@ -7,8 +8,17 @@ import '../styles/jobs.css';
 
 const ACTIVE_STATUSES = new Set(['queued', 'in_progress', 'paused_quota', 'running']);
 
+const KIND_FILTERS: { value: JobKind | 'all'; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'update', label: 'Upload update' },
+  { value: 'backfill', label: 'Upload backfill' },
+  { value: 'import_subscriptions', label: 'Subscription update' },
+];
+
 export default function JobsPage() {
-  const { data: jobsData, isLoading } = useJobs({
+  const [kindFilter, setKindFilter] = useState<JobKind | 'all'>('all');
+
+  const { data: jobsData, isLoading } = useJobs(kindFilter === 'all' ? undefined : kindFilter, {
     refetchInterval: (query) => {
       // Poll every 5 seconds while anything is still active. Reads
       // query.state.data (the value TanStack Query passes in), not the
@@ -39,7 +49,20 @@ export default function JobsPage() {
   return (
     <div className="jobs-page">
       <h1>Jobs</h1>
-      <p className="jobs-subtitle">Backfill, upload syncs, and subscription imports.</p>
+      <p className="jobs-subtitle">Backfill, upload updates, and subscription imports.</p>
+
+      <div className="jobs-filter-bar">
+        {KIND_FILTERS.map((f) => (
+          <button
+            key={f.value}
+            type="button"
+            className={`jobs-filter-btn${kindFilter === f.value ? ' active' : ''}`}
+            onClick={() => setKindFilter(f.value)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
 
       {activeCount > 0 && (
         <div className="jobs-summary">
@@ -50,7 +73,7 @@ export default function JobsPage() {
       {isLoading ? (
         <p>Loading...</p>
       ) : !jobs || jobs.length === 0 ? (
-        <p>No jobs yet</p>
+        <p>No jobs match this filter</p>
       ) : (
         <div className="jobs-list">
           {jobs.map((job) => (

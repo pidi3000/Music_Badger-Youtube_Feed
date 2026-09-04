@@ -1,7 +1,7 @@
 import { useQuery, UseQueryOptions } from '@tanstack/react-query';
 import { apiCall } from './client';
 
-export type JobKind = 'backfill' | 'sync_api' | 'sync_rss' | 'import_subscriptions';
+export type JobKind = 'update' | 'backfill' | 'import_subscriptions';
 
 export interface Job {
   id: string;
@@ -21,14 +21,15 @@ export interface Job {
   backfill_task_id: number | null;
 }
 
-export async function getJobs(): Promise<Job[]> {
-  return apiCall<Job[]>('/api/jobs');
+export async function getJobs(kind?: JobKind): Promise<Job[]> {
+  const params = kind ? `?kind=${kind}` : '';
+  return apiCall<Job[]>(`/api/jobs${params}`);
 }
 
-export function useJobs(options?: Omit<UseQueryOptions, 'queryKey' | 'queryFn'>) {
+export function useJobs(kind?: JobKind, options?: Omit<UseQueryOptions, 'queryKey' | 'queryFn'>) {
   return useQuery({
-    queryKey: ['jobs'],
-    queryFn: getJobs,
+    queryKey: ['jobs', kind],
+    queryFn: () => getJobs(kind),
     ...options,
   });
 }

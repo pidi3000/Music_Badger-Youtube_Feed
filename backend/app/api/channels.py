@@ -38,12 +38,10 @@ async def list_channels(
     untagged: bool = False,
     source: Literal["manual", "subscription"] | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
-    fetch_method: str | None = None,
     search: str | None = None,
     sort: ChannelSortField = "name",
     order: Literal["asc", "desc"] = "asc",
 ):
-    settings = await get_or_create_settings(session)
     query = _channel_query()
     if tag_id is not None:
         query = query.join(Channel.channel_tags).where(ChannelTag.tag_id == tag_id)
@@ -55,8 +53,6 @@ async def list_channels(
         query = query.where(Channel.source.in_(["subscription", "both"]))
     if status_filter is not None:
         query = query.where(Channel.subscription_status == status_filter)
-    if fetch_method is not None:
-        query = query.where(Channel.upload_fetch_method == fetch_method)
     if search:
         query = query.where(Channel.title.ilike(f"%{search}%"))
 
@@ -65,27 +61,25 @@ async def list_channels(
     stats_by_channel = await get_upload_stats(session, [c.id for c in channels])
     channels = sort_channels(channels, stats_by_channel, sort, order)
     await session.commit()
-    return [channel_to_out(c, settings, stats_by_channel.get(c.id, UploadStats())) for c in channels]
+    return [channel_to_out(c, stats_by_channel.get(c.id, UploadStats())) for c in channels]
 
 
 @router.post("", response_model=ChannelOut, status_code=status.HTTP_201_CREATED)
 async def add_channel(body: ChannelCreate, session: DbSession, http_client: HttpClient):
     settings = await get_or_create_settings(session)
     try:
-        channel = await create_manual_channel(
-            session, http_client, settings, body.channel_link, body.tag_ids, body.upload_fetch_method
-        )
+        channel = await create_manual_channel(session, http_client, settings, body.channel_link, body.tag_ids)
     except ChannelResolveError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except key_pool.QuotaExhaustedError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="no active-use API key available — add one in Settings and try again",
+            detail="no active API key available — add one in Settings and try again",
         ) from exc
 
     channel = await load_channel(session, channel.id)
-    # Freshly created: no uploads exist yet, no need to query for stats.
-    return channel_to_out(channel, settings)
+    stats = await _stats_for(session, channel.id)
+    return channel_to_out(channel, stats)
 
 
 async def _get_or_404(session: DbSession, channel_id: int) -> Channel:
@@ -102,30 +96,23 @@ async def _stats_for(session: DbSession, channel_id: int) -> UploadStats:
 
 @router.get("/{channel_id}", response_model=ChannelOut)
 async def get_channel(channel_id: int, session: DbSession):
-    settings = await get_or_create_settings(session)
     channel = await _get_or_404(session, channel_id)
     stats = await _stats_for(session, channel_id)
     await session.commit()
-    return channel_to_out(channel, settings, stats)
+    return channel_to_out(channel, stats)
 
 
 @router.patch("/{channel_id}", response_model=ChannelOut)
 async def update_channel(channel_id: int, body: ChannelUpdate, session: DbSession):
-    settings = await get_or_create_settings(session)
     channel = await _get_or_404(session, channel_id)
 
     if body.tag_ids is not None:
         await set_channel_tags(session, channel, body.tag_ids)
-    # "upload_fetch_method" absent from the request body -> leave the
-    # override as-is. Present (even as explicit null, to clear it back to
-    # the global default) -> apply it.
-    if "upload_fetch_method" in body.model_fields_set:
-        channel.upload_fetch_method = body.upload_fetch_method
 
     stats = await _stats_for(session, channel_id)
     await session.commit()
     channel = await load_channel(session, channel_id)
-    return channel_to_out(channel, settings, stats)
+    return channel_to_out(channel, stats)
 
 
 @router.delete("/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -137,10 +124,9 @@ async def delete_channel(channel_id: int, session: DbSession):
 
 @router.post("/{channel_id}/ack-unsubscribe", response_model=ChannelOut)
 async def ack_unsubscribe(channel_id: int, session: DbSession):
-    settings = await get_or_create_settings(session)
     channel = await _get_or_404(session, channel_id)
     channel.unsubscribed_ack = True
     stats = await _stats_for(session, channel_id)
     await session.commit()
     channel = await load_channel(session, channel_id)
-    return channel_to_out(channel, settings, stats)
+    return channel_to_out(channel, stats)

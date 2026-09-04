@@ -36,7 +36,7 @@ async def test_process_task_passes_persisted_strict_shorts_setting(db_session, m
     await db_session.commit()
 
     channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="k1", group="background", key_value_encrypted=encrypt("x")))
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
     task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=1, days=365))
@@ -58,7 +58,7 @@ async def test_process_task_passes_persisted_strict_shorts_setting(db_session, m
 @pytest.mark.asyncio
 async def test_completes_when_min_count_and_date_target_both_reached(db_session, monkeypatch):
     channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="k1", group="background", key_value_encrypted=encrypt("x")))
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
     task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=3, days=365))
@@ -89,7 +89,7 @@ async def test_completes_when_min_count_and_date_target_both_reached(db_session,
 @pytest.mark.asyncio
 async def test_completes_when_channel_has_fewer_uploads_than_target(db_session, monkeypatch):
     channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="k1", group="background", key_value_encrypted=encrypt("x")))
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
     task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=50, days=365))
@@ -112,7 +112,7 @@ async def test_completes_when_channel_has_fewer_uploads_than_target(db_session, 
 @pytest.mark.asyncio
 async def test_channel_with_no_uploads_completes_immediately(db_session, monkeypatch):
     channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="k1", group="background", key_value_encrypted=encrypt("x")))
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
     task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings())
@@ -133,7 +133,7 @@ async def test_channel_with_no_uploads_completes_immediately(db_session, monkeyp
 @pytest.mark.asyncio
 async def test_pauses_on_quota_exhaustion_and_resumes_from_cursor(db_session, monkeypatch):
     channel = await make_channel(db_session)
-    key = ApiKey(label="k1", group="background", key_value_encrypted=encrypt("x"))
+    key = ApiKey(label="k1", key_value_encrypted=encrypt("x"))
     db_session.add(key)
     await db_session.commit()
 
@@ -184,7 +184,7 @@ async def test_pauses_on_quota_exhaustion_and_resumes_from_cursor(db_session, mo
 async def test_worker_tick_processes_queued_and_paused_but_not_completed(db_session, monkeypatch):
     channel_a = await make_channel(db_session, "UCaaa")
     channel_b = await make_channel(db_session, "UCbbb")
-    db_session.add(ApiKey(label="k1", group="background", key_value_encrypted=encrypt("x")))
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
     settings = fake_settings(min_count=1, days=365)

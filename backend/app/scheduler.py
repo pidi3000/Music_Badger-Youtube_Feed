@@ -11,7 +11,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.db import async_session_factory
-from app.services.backfill_service import run_worker_tick
+from app.services import job_worker
 from app.services.sync_service import create_and_run_sync
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ async def run_sync_guarded(state: SchedulerState) -> None:
 
 async def _backfill_tick() -> None:
     async with async_session_factory() as session, httpx.AsyncClient(timeout=30) as client:
-        await run_worker_tick(session, client)
+        await job_worker.run_worker_tick(session, client)
 
 
 def create_scheduler(

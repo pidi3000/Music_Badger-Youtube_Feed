@@ -29,12 +29,9 @@ architecture decisions for the rebuild before any code is written.
 | App auth token | Signed httpOnly session cookie set on login with the shared secret. |
 | Sync history | A `SyncLog` table ships in v1 (not deferred). |
 | Multiple YouTube API keys | Supported — a pool of API keys managed in the SPA Settings UI, stored encrypted in the DB. Used to spread quota for public Data API calls (channel resolution, uploads via API, video details). |
-| Key groups | Each key belongs to one of two groups, set per-key in Settings: **background** (scheduled sync, manual "Sync Now", backfill queue) or **active** (interactive, user-initiated single lookups, e.g. resolving a channel when manually adding it). |
-| Group isolation | Strict — a group never borrows keys from the other, even if its own group is fully exhausted and the other has spare quota. |
-| Manual "Sync Now" pool | Uses the **background** group, same as scheduled sync — it's the same bulk operation, just triggered early. |
-| Key rotation (within a group) | Use one key until it's quota-exhausted, then move to the next active key in that group. |
-| Upload fetch method | Two methods per channel: **API** (YouTube Data API, full history, richer metadata, uses quota) or **HTTP/RSS** (public `feeds/videos.xml` feed, no key/quota needed, ~15 most recent uploads only, less metadata). Global default + per-channel override. |
-| Quota-exhaustion fallback | If a channel is set to `API` but every key in the pool is exhausted, the sync temporarily falls back to `RSS` for that channel and logs/flags that a fallback occurred (surfaced via `SyncLog` / a UI indicator), rather than skipping the channel. |
+| Key groups | **Superseded** — the background/active split described below was removed. Keys are one undifferentiated pool; every caller rotates through whichever key was least recently used, on quota-exceeded. See §6. |
+| Upload fetch method | **Superseded** — per-channel/global method selection was removed. Every channel always tries the API first; RSS is now purely an automatic fallback (toggleable, on by default) when every key is quota-exhausted, not a method the user picks. See §6. |
+| Quota-exhaustion fallback | **Superseded** — see §6: RSS fallback is now gated by `AppSettings.rss_fallback_enabled` (default on) rather than always happening, and applies to the resumable `UpdateTask` queue (§7), not a synchronous per-channel sync step. |
 | Upload caching | All fetched uploads are cached in the DB so they never need to be re-fetched. See §7. |
 | Cache pruning | None — once an upload is cached it's kept forever. The 1yr/min-50 rule only governs how far back to *backfill* when a channel is first synced, not later deletion. |
 | Retention thresholds | Configurable in Settings (defaults: 1 year back, minimum 50 uploads). |
@@ -139,7 +136,21 @@ The user is informed via:
 - Manually-added channels (`source = manual`, not from subscriptions) are
   unaffected by this logic entirely.
 
-## 6. Upload fetch methods: API key groups & RSS fallback
+## 6. Upload fetch methods: API key pool & RSS fallback
+
+**Superseded from the original design below**: there is no longer a
+background/active key-group split, and no per-channel or global fetch-method
+choice. Every channel's incremental "what's new" sync always tries the API
+first via a single shared key pool (`app.services.key_pool` — one key used
+until quota-exceeded, then the next least-recently-used active key, no
+group/isolation concept); only when every key is exhausted does it fall back
+to RSS for that cycle, and only if `AppSettings.rss_fallback_enabled` (default
+on) allows it — otherwise the task pauses (`paused_quota`) and resumes once a
+key is available, same as backfill. A channel that fell back to RSS is
+automatically retried via the API on its next scheduled update, with no
+extra bookkeeping needed (each cycle enqueues a fresh `UpdateTask`, see §7).
+The rest of this section (API vs. RSS trade-offs) still applies; the key-pool
+and fallback-configuration details below it do not.
 
 Two independent ways to get a channel's uploads:
 
@@ -198,6 +209,21 @@ This fallback does not apply to `BackfillTask` processing — RSS can't
 satisfy a backfill target, so a backfill task pauses instead (§7).
 
 ## 7. Upload caching, backfill queue & progress UI
+
+**Superseded**: incremental "what's new" syncing is now also a resumable
+queue (`UpdateTask`, mirroring `BackfillTask`'s lifecycle) rather than a
+synchronous step inside the sync job — see `app.services.update_service`.
+Each sync cycle enqueues one `UpdateTask` per channel; a task pages the
+uploads playlist until a page yields no new uploads, there are no more
+pages, or the oldest fetched upload crosses `AppSettings.update_lookback_days`
+(default 30) — not a wall-clock timer. A worker tick
+(`app.services.job_worker.run_worker_tick`) always drains every runnable
+`UpdateTask` before touching the `BackfillTask` queue at all, so a channel's
+deep-history backfill never delays fresh uploads showing up elsewhere.
+Newly-added channels (manual add or subscription import) also get an
+immediate, synchronous one-page "quick sync" (`update_service.run_quick_sync`)
+so their newest uploads appear right away, in addition to being queued for
+backfill.
 
 Every upload fetched (via API or RSS) is persisted to the `Upload` table
 permanently — the feed and channel pages always read from the DB, never

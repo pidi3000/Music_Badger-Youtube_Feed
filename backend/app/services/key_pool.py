@@ -1,7 +1,5 @@
-"""Rotates YouTube Data API keys within a group (background/active), per
-PROJECT_OUTLINE.md §6: use one key until it's quota-exhausted, then move to
-the next active key in the *same* group. Groups never borrow from each
-other.
+"""Rotates YouTube Data API keys, per PROJECT_OUTLINE.md §6: use one key
+until it's quota-exhausted, then move to the next active key in the pool.
 """
 
 from collections.abc import Awaitable, Callable
@@ -21,11 +19,10 @@ _PACIFIC = ZoneInfo("America/Los_Angeles")
 
 
 class QuotaExhaustedError(Exception):
-    """Raised when every key in a group is exhausted/disabled."""
+    """Raised when every key in the pool is exhausted/disabled."""
 
-    def __init__(self, group: str):
-        super().__init__(f"no active API key available in group '{group}'")
-        self.group = group
+    def __init__(self) -> None:
+        super().__init__("no active API key available")
 
 
 class YoutubeQuotaExceeded(Exception):
@@ -41,11 +38,10 @@ def next_quota_reset_utc(now: datetime | None = None) -> datetime:
     return next_midnight_pacific.astimezone(timezone.utc).replace(tzinfo=None)
 
 
-async def _reactivate_expired_keys(session: AsyncSession, group: str) -> None:
+async def _reactivate_expired_keys(session: AsyncSession) -> None:
     now = datetime.utcnow()
     result = await session.execute(
         select(ApiKey).where(
-            ApiKey.group == group,
             ApiKey.status == "exhausted",
             ApiKey.quota_resets_at.is_not(None),
             ApiKey.quota_resets_at <= now,
@@ -57,11 +53,11 @@ async def _reactivate_expired_keys(session: AsyncSession, group: str) -> None:
     await session.flush()
 
 
-async def get_active_key(session: AsyncSession, group: str) -> ApiKey | None:
-    await _reactivate_expired_keys(session, group)
+async def get_active_key(session: AsyncSession) -> ApiKey | None:
+    await _reactivate_expired_keys(session)
     result = await session.execute(
         select(ApiKey)
-        .where(ApiKey.group == group, ApiKey.status == "active")
+        .where(ApiKey.status == "active")
         .order_by(ApiKey.last_used_at.asc().nulls_first(), ApiKey.id.asc())
         .limit(1)
     )
@@ -79,18 +75,16 @@ async def mark_key_exhausted(session: AsyncSession, key: ApiKey) -> None:
     await session.flush()
 
 
-async def call_with_key_rotation(
-    session: AsyncSession, group: str, call: Callable[[str], Awaitable[T]]
-) -> T:
-    """Runs `call(api_key_value)`, rotating through `group`'s pool on quota
-    errors. Raises QuotaExhaustedError once every key in the group has been
-    tried and exhausted (or none exist)."""
+async def call_with_key_rotation(session: AsyncSession, call: Callable[[str], Awaitable[T]]) -> T:
+    """Runs `call(api_key_value)`, rotating through the key pool on quota
+    errors. Raises QuotaExhaustedError once every key has been tried and
+    exhausted (or none exist)."""
 
     tried_key_ids: set[int] = set()
     while True:
-        key = await get_active_key(session, group)
+        key = await get_active_key(session)
         if key is None or key.id in tried_key_ids:
-            raise QuotaExhaustedError(group)
+            raise QuotaExhaustedError()
 
         tried_key_ids.add(key.id)
         try:

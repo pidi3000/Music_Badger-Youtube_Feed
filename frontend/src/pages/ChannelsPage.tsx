@@ -9,7 +9,6 @@ import {
   ChannelSort,
 } from '../api/channels';
 import { useTags } from '../api/tags';
-import { useSettings } from '../api/settings';
 import { useToast } from '../context/ToastContext';
 import { getErrorMessage } from '../utils/errors';
 import ChannelRow from '../components/ChannelRow';
@@ -54,7 +53,6 @@ export default function ChannelsPage() {
     order,
   });
   const { data: tagsData } = useTags();
-  const { data: settingsData } = useSettings();
 
   const channels = channelsData as Channel[] | undefined;
   const createChannelMutation = useCreateChannel();
@@ -63,18 +61,13 @@ export default function ChannelsPage() {
   const ackUnsubscribeMutation = useAckUnsubscribe();
   const { showError } = useToast();
 
-  const handleAddChannel = async (
-    channelLink: string,
-    tagIds: number[],
-    fetchMethod: 'api' | 'rss' | null,
-  ) => {
+  const handleAddChannel = async (channelLink: string, tagIds: number[]) => {
     // Deliberately not caught here — AddChannelModal displays this error
     // inline itself (it's right next to the form the user just submitted),
     // so it re-throws rather than swallowing it silently.
     await createChannelMutation.mutateAsync({
       channel_link: channelLink,
       tag_ids: tagIds.length > 0 ? tagIds : undefined,
-      upload_fetch_method: fetchMethod ?? undefined,
     });
     setShowAddModal(false);
   };
@@ -93,20 +86,9 @@ export default function ChannelsPage() {
     }
   };
 
-  const handleUpdateChannel = async (id: number, tagIds: number[], fetchMethod: string | null | undefined) => {
+  const handleUpdateChannel = async (id: number, tagIds: number[]) => {
     try {
-      await updateChannelMutation.mutateAsync({
-        id,
-        payload: {
-          tag_ids: tagIds,
-          // undefined = the user never touched the fetch-method select,
-          // so it's omitted from the request entirely rather than
-          // resubmitting whatever it happened to display — see ChannelRow.
-          ...(fetchMethod !== undefined && {
-            upload_fetch_method: (fetchMethod === 'null' ? null : fetchMethod) as 'api' | 'rss' | null,
-          }),
-        },
-      });
+      await updateChannelMutation.mutateAsync({ id, payload: { tag_ids: tagIds } });
     } catch (err) {
       showError(getErrorMessage(err, 'Failed to update channel'));
     }
@@ -130,12 +112,7 @@ export default function ChannelsPage() {
       </div>
 
       {showAddModal && (
-        <AddChannelModal
-          onClose={() => setShowAddModal(false)}
-          onSubmit={handleAddChannel}
-          tags={tagsData || []}
-          globalDefaultFetchMethod={settingsData?.upload_fetch_method}
-        />
+        <AddChannelModal onClose={() => setShowAddModal(false)} onSubmit={handleAddChannel} tags={tagsData || []} />
       )}
 
       <div className="channels-filter-bar">

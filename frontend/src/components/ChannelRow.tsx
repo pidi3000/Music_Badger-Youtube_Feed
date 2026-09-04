@@ -1,8 +1,6 @@
-import { useState } from 'react';
 import { Channel } from '../api/channels';
 import { Tag } from '../api/tags';
 import { youtubeChannelUrl } from '../utils/youtube';
-import TagChip from './TagChip';
 import ChannelAvatar from './ChannelAvatar';
 import '../styles/channel-row.css';
 
@@ -10,7 +8,7 @@ interface ChannelRowProps {
   channel: Channel;
   allTags: Tag[];
   onDelete: () => void;
-  onUpdate: (id: number, tagIds: number[], fetchMethod: string | null | undefined) => void;
+  onUpdate: (id: number, tagIds: number[]) => void;
   onAckUnsubscribe: (id: number) => void;
 }
 
@@ -38,25 +36,15 @@ function formatChannelStats(channel: Channel): string {
 }
 
 export default function ChannelRow({ channel, allTags, onDelete, onUpdate, onAckUnsubscribe }: ChannelRowProps) {
-  const [showEdit, setShowEdit] = useState(false);
-  const [selectedTags, setSelectedTags] = useState<number[]>(channel.tags.map((t) => t.id));
-  const [fetchMethod, setFetchMethod] = useState<string | null>(channel.upload_fetch_method);
-  // Only true once the user actually touches the select — otherwise we'd
-  // resubmit upload_fetch_method on every save (e.g. one that only meant
-  // to change tags), which is harmless today but risks accidentally
-  // pinning a "use default" channel to an explicit override later.
-  const [fetchMethodTouched, setFetchMethodTouched] = useState(false);
+  const selectedTagIds = new Set(channel.tags.map((t) => t.id));
 
-  const handleSave = () => {
-    onUpdate(channel.id, selectedTags, fetchMethodTouched ? fetchMethod : undefined);
-    setFetchMethodTouched(false);
-    setShowEdit(false);
-  };
-
+  // Applied immediately on click, no Edit/Save flow — clicking a chip is
+  // the whole interaction, so tagging a long channel list stays fast.
   const handleToggleTag = (tagId: number) => {
-    setSelectedTags((prev) =>
-      prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId],
-    );
+    const nextTagIds = selectedTagIds.has(tagId)
+      ? [...selectedTagIds].filter((id) => id !== tagId)
+      : [...selectedTagIds, tagId];
+    onUpdate(channel.id, nextTagIds);
   };
 
   return (
@@ -89,65 +77,33 @@ export default function ChannelRow({ channel, allTags, onDelete, onUpdate, onAck
           </div>
         )}
 
-        {!showEdit ? (
-          <>
-            <div className="tags-display">
-              {channel.tags.map((tag) => (
-                <TagChip key={tag.id} tag={tag} />
-              ))}
-            </div>
-            <p className="fetch-method">Fetch: {channel.effective_fetch_method}</p>
-          </>
-        ) : (
-          <>
-            <div className="tags-edit">
-              {allTags.map((tag) => (
-                <label key={tag.id}>
-                  <input
-                    type="checkbox"
-                    checked={selectedTags.includes(tag.id)}
-                    onChange={() => handleToggleTag(tag.id)}
-                  />
+        {allTags.length > 0 && (
+          <div className="tags-toggle">
+            {allTags.map((tag) => {
+              const active = selectedTagIds.has(tag.id);
+              return (
+                <button
+                  key={tag.id}
+                  type="button"
+                  className={`tag-toggle-chip${active ? ' active' : ''}`}
+                  style={
+                    active
+                      ? { backgroundColor: tag.color, borderColor: tag.color }
+                      : { borderColor: tag.color, color: tag.color }
+                  }
+                  onClick={() => handleToggleTag(tag.id)}
+                  aria-pressed={active}
+                >
                   {tag.name}
-                </label>
-              ))}
-            </div>
-            <select
-              value={fetchMethod || 'null'}
-              onChange={(e) => {
-                setFetchMethodTouched(true);
-                setFetchMethod(e.target.value === 'null' ? null : (e.target.value as 'api' | 'rss'));
-              }}
-            >
-              <option value="null">Use default (currently {channel.effective_fetch_method.toUpperCase()})</option>
-              <option value="api">API</option>
-              <option value="rss">RSS</option>
-            </select>
-          </>
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
 
       <div className="channel-actions">
-        {showEdit ? (
-          <>
-            <button onClick={handleSave}>Save</button>
-            <button
-              onClick={() => {
-                setSelectedTags(channel.tags.map((t) => t.id));
-                setFetchMethod(channel.upload_fetch_method);
-                setFetchMethodTouched(false);
-                setShowEdit(false);
-              }}
-            >
-              Cancel
-            </button>
-          </>
-        ) : (
-          <>
-            <button onClick={() => setShowEdit(true)}>Edit</button>
-            <button onClick={onDelete}>Delete</button>
-          </>
-        )}
+        <button onClick={onDelete}>Delete</button>
       </div>
     </div>
   );

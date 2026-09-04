@@ -4,7 +4,8 @@ import { apiCall } from './client';
 export interface Settings {
   sync_interval_minutes: number;
   backfill_worker_interval_seconds: number;
-  upload_fetch_method: 'api' | 'rss';
+  update_lookback_days: number;
+  rss_fallback_enabled: boolean;
   backfill_days: number;
   backfill_min_count: number;
   strict_shorts_detection: boolean;
@@ -20,7 +21,8 @@ export async function updateSettings(
   payload: Partial<{
     sync_interval_minutes: number;
     backfill_worker_interval_seconds: number;
-    upload_fetch_method: 'api' | 'rss';
+    update_lookback_days: number;
+    rss_fallback_enabled: boolean;
     backfill_days: number;
     backfill_min_count: number;
     strict_shorts_detection: boolean;

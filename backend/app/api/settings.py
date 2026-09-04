@@ -14,7 +14,8 @@ def _to_out(settings) -> SettingsOut:
     return SettingsOut(
         sync_interval_minutes=settings.sync_interval_minutes,
         backfill_worker_interval_seconds=settings.backfill_worker_interval_seconds,
-        upload_fetch_method=settings.upload_fetch_method,
+        update_lookback_days=settings.update_lookback_days,
+        rss_fallback_enabled=settings.rss_fallback_enabled,
         backfill_days=settings.backfill_days,
         backfill_min_count=settings.backfill_min_count,
         strict_shorts_detection=settings.strict_shorts_detection,
@@ -34,8 +35,10 @@ async def get_settings(session: DbSession):
 async def update_settings(body: SettingsUpdate, session: DbSession, scheduler: SchedulerDep):
     settings = await get_or_create_settings(session)
 
-    if body.upload_fetch_method is not None:
-        settings.upload_fetch_method = body.upload_fetch_method
+    if body.update_lookback_days is not None:
+        settings.update_lookback_days = body.update_lookback_days
+    if body.rss_fallback_enabled is not None:
+        settings.rss_fallback_enabled = body.rss_fallback_enabled
     if body.backfill_days is not None:
         settings.backfill_days = body.backfill_days
     if body.backfill_min_count is not None:

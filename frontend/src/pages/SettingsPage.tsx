@@ -13,11 +13,12 @@ export default function SettingsPage() {
 
   // Settings
   const { data: settings, isLoading: settingsLoading } = useSettings();
-  const [fetchMethod, setFetchMethod] = useState<'api' | 'rss'>('api');
   const [backfillDays, setBackfillDays] = useState(0);
   const [backfillMinCount, setBackfillMinCount] = useState(0);
   const [syncIntervalMinutes, setSyncIntervalMinutes] = useState(0);
   const [backfillWorkerIntervalSeconds, setBackfillWorkerIntervalSeconds] = useState(0);
+  const [updateLookbackDays, setUpdateLookbackDays] = useState(0);
+  const [rssFallbackEnabled, setRssFallbackEnabled] = useState(true);
   const [strictShortsDetection, setStrictShortsDetection] = useState(false);
   const updateSettingsMutation = useUpdateSettings();
   const rescanShortsMutation = useRescanShorts();
@@ -29,7 +30,6 @@ export default function SettingsPage() {
   // API Keys
   const { data: apiKeysData } = useApiKeys();
   const [keyLabel, setKeyLabel] = useState('');
-  const [keyGroup, setKeyGroup] = useState<'background' | 'active'>('active');
   const [keyValue, setKeyValue] = useState('');
   const createApiKeyMutation = useCreateApiKey();
   const deleteApiKeyMutation = useDeleteApiKey();
@@ -42,11 +42,12 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (settings) {
-      setFetchMethod(settings.upload_fetch_method);
       setBackfillDays(settings.backfill_days);
       setBackfillMinCount(settings.backfill_min_count);
       setSyncIntervalMinutes(settings.sync_interval_minutes);
       setBackfillWorkerIntervalSeconds(settings.backfill_worker_interval_seconds);
+      setUpdateLookbackDays(settings.update_lookback_days);
+      setRssFallbackEnabled(settings.rss_fallback_enabled);
       setStrictShortsDetection(settings.strict_shorts_detection);
     }
   }, [settings]);
@@ -63,11 +64,12 @@ export default function SettingsPage() {
     e.preventDefault();
     try {
       await updateSettingsMutation.mutateAsync({
-        upload_fetch_method: fetchMethod,
         backfill_days: backfillDays,
         backfill_min_count: backfillMinCount,
         sync_interval_minutes: syncIntervalMinutes,
         backfill_worker_interval_seconds: backfillWorkerIntervalSeconds,
+        update_lookback_days: updateLookbackDays,
+        rss_fallback_enabled: rssFallbackEnabled,
         strict_shorts_detection: strictShortsDetection,
       });
     } catch (err) {
@@ -110,7 +112,6 @@ export default function SettingsPage() {
     try {
       await createApiKeyMutation.mutateAsync({
         label: keyLabel,
-        group: keyGroup,
         key_value: keyValue,
       });
       setKeyLabel('');
@@ -152,13 +153,6 @@ export default function SettingsPage() {
         ) : (
           <form onSubmit={handleSaveSettings}>
             <div>
-              <label>Upload Fetch Method</label>
-              <select value={fetchMethod} onChange={(e) => setFetchMethod(e.target.value as 'api' | 'rss')}>
-                <option value="api">API</option>
-                <option value="rss">RSS</option>
-              </select>
-            </div>
-            <div>
               <label>Backfill Days</label>
               <input
                 type="number"
@@ -191,6 +185,35 @@ export default function SettingsPage() {
                 value={backfillWorkerIntervalSeconds}
                 onChange={(e) => setBackfillWorkerIntervalSeconds(Number(e.target.value))}
               />
+            </div>
+            <div>
+              <label>Update Lookback (days)</label>
+              <input
+                type="number"
+                min={1}
+                value={updateLookbackDays}
+                onChange={(e) => setUpdateLookbackDays(Number(e.target.value))}
+              />
+              <p className="setting-hint">
+                On an incremental update, how far back to keep paging through a channel's uploads
+                looking for new ones.
+              </p>
+            </div>
+            <div className="strict-shorts-toggle">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={rssFallbackEnabled}
+                  onChange={(e) => setRssFallbackEnabled(e.target.checked)}
+                />
+                Allow RSS fallback when API quota is exhausted
+              </label>
+              <p className="setting-hint">
+                When every API key is out of quota, fall back to RSS for updates (fewer uploads per
+                channel, no Shorts/Live classification) instead of waiting for quota to reset.
+                Channels updated this way are automatically re-checked via the API once quota is
+                available again.
+              </p>
             </div>
             <div className="strict-shorts-toggle">
               <label>
@@ -259,10 +282,6 @@ export default function SettingsPage() {
             value={keyLabel}
             onChange={(e) => setKeyLabel(e.target.value)}
           />
-          <select value={keyGroup} onChange={(e) => setKeyGroup(e.target.value as 'background' | 'active')}>
-            <option value="active">Active</option>
-            <option value="background">Background</option>
-          </select>
           <input
             type="password"
             placeholder="Key value"
@@ -277,7 +296,6 @@ export default function SettingsPage() {
             <thead>
               <tr>
                 <th>Label</th>
-                <th>Group</th>
                 <th>Status</th>
                 <th>Quota Resets</th>
                 <th>Last Used</th>
@@ -288,7 +306,6 @@ export default function SettingsPage() {
               {apiKeysData.map((key) => (
                 <tr key={key.id}>
                   <td>{key.label}</td>
-                  <td>{key.group}</td>
                   <td>{key.status}</td>
                   <td>{key.quota_resets_at ? new Date(key.quota_resets_at).toLocaleDateString() : '-'}</td>
                   <td>{key.last_used_at ? new Date(key.last_used_at).toLocaleString() : '-'}</td>

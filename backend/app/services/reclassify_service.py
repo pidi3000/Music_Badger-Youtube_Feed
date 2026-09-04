@@ -60,7 +60,7 @@ async def rescan_recent_uploads(session: AsyncSession, http_client: httpx.AsyncC
         async def _call(api_key: str) -> dict[str, youtube_client.VideoClassification]:
             return await youtube_client.classify_video_types(http_client, api_key, batch, strict_shorts=True)
 
-        classifications = await key_pool.call_with_key_rotation(session, "active", _call)
+        classifications = await key_pool.call_with_key_rotation(session, _call)
         for video_id, classification in classifications.items():
             upload = uploads_by_video_id[video_id]
             if classification.video_type != upload.video_type:

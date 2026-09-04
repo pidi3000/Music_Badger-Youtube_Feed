@@ -9,6 +9,27 @@
   font-size: 14px;
 }
 
+.jobs-filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.jobs-filter-btn {
+  padding: 8px 14px;
+  font-size: 13px;
+  background: var(--bg-light);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.jobs-filter-btn.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
 .jobs-summary {
   display: flex;
   gap: 15px;

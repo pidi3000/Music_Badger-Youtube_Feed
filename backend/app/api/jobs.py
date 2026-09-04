@@ -1,8 +1,8 @@
 """Unified, read-only view across every kind of background activity —
-backfill tasks, per-channel incremental API/RSS upload syncs, and
-subscription imports — for the Jobs page. Actions (retry) stay on their
-own resource-specific routes (POST /api/backfill-tasks/{id}/retry); this
-router only aggregates and sorts them for display.
+backfill tasks, per-channel incremental upload updates, and subscription
+imports — for the Jobs page. Actions (retry) stay on their own
+resource-specific routes (POST /api/backfill-tasks/{id}/retry); this router
+only aggregates, filters, and sorts them for display.
 """
 
 from fastapi import APIRouter
@@ -10,8 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.deps import DbSession, RequireAuth
-from app.models import BackfillTask, ChannelSyncJob, SyncLog
-from app.schemas import JobOut
+from app.models import BackfillTask, SyncLog, UpdateTask
+from app.schemas import JobKind, JobOut
 from app.services.channel_service import channel_to_ref
 
 router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[RequireAuth])
@@ -36,19 +36,22 @@ def _backfill_to_job(task: BackfillTask) -> JobOut:
     )
 
 
-def _sync_job_to_job(job: ChannelSyncJob) -> JobOut:
+def _update_task_to_job(task: UpdateTask) -> JobOut:
     detail = None
-    if job.status == "success":
-        detail = f"{job.new_uploads_count} new upload{'' if job.new_uploads_count == 1 else 's'}"
+    if task.status == "completed":
+        via = " via RSS" if task.used_rss_fallback else ""
+        detail = f"{task.fetched_count} new upload{'' if task.fetched_count == 1 else 's'}{via}"
+    elif task.fetched_count:
+        detail = f"{task.fetched_count} fetched so far"
     return JobOut(
-        id=f"sync-{job.id}",
-        kind="sync_api" if job.method == "api" else "sync_rss",
-        channel=channel_to_ref(job.channel),
-        status=job.status,
+        id=f"update-{task.id}",
+        kind="update",
+        channel=channel_to_ref(task.channel),
+        status=task.status,
         detail=detail,
-        error=job.error,
-        started_at=job.started_at,
-        finished_at=job.finished_at,
+        error=task.last_error,
+        started_at=task.started_at or task.created_at,
+        finished_at=task.completed_at,
     )
 
 
@@ -66,17 +69,17 @@ def _sync_log_to_job(log: SyncLog) -> JobOut:
 
 
 @router.get("", response_model=list[JobOut])
-async def list_jobs(session: DbSession, limit: int = 100):
+async def list_jobs(session: DbSession, limit: int = 100, kind: JobKind | None = None):
     backfill_result = await session.execute(
         select(BackfillTask)
         .options(selectinload(BackfillTask.channel))
         .order_by(BackfillTask.created_at.desc())
         .limit(limit)
     )
-    sync_job_result = await session.execute(
-        select(ChannelSyncJob)
-        .options(selectinload(ChannelSyncJob.channel))
-        .order_by(ChannelSyncJob.started_at.desc())
+    update_task_result = await session.execute(
+        select(UpdateTask)
+        .options(selectinload(UpdateTask.channel))
+        .order_by(UpdateTask.created_at.desc())
         .limit(limit)
     )
     sync_log_result = await session.execute(select(SyncLog).order_by(SyncLog.started_at.desc()).limit(limit))
@@ -84,8 +87,10 @@ async def list_jobs(session: DbSession, limit: int = 100):
 
     jobs = (
         [_backfill_to_job(t) for t in backfill_result.scalars()]
-        + [_sync_job_to_job(j) for j in sync_job_result.scalars()]
+        + [_update_task_to_job(t) for t in update_task_result.scalars()]
         + [_sync_log_to_job(log) for log in sync_log_result.scalars()]
     )
+    if kind is not None:
+        jobs = [j for j in jobs if j.kind == kind]
     jobs.sort(key=lambda j: j.finished_at or j.started_at, reverse=True)
     return jobs[:limit]

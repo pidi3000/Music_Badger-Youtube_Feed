@@ -1,16 +1,16 @@
 """Resumable upload-history backfill queue — PROJECT_OUTLINE.md §7.
 
-Each channel gets one BackfillTask on creation. The worker (scheduler.py)
-calls `process_next_task` on a tick; a task pages through the API via the
-**background** key group until either the retention target is met or the
-channel's whole history is exhausted. If every background key is
+Each channel gets one BackfillTask on creation. The worker
+(app.services.job_worker) calls `process_task` on a tick, but only once the
+UpdateTask queue is empty — see job_worker.run_worker_tick. A task pages
+through the API via the shared key pool until either the retention target
+is met or the channel's whole history is exhausted. If every key is
 quota-exhausted mid-task, the task pauses (`paused_quota`) with its cursor
 intact and is retried automatically on a later tick — never restarted from
-scratch, never silently dropped.
-
-RSS-configured channels still get their *initial* backfill via the API
-(RSS can't satisfy a count/date target on its own — it only ever returns
-the ~15 most recent items) before their ongoing syncs switch to RSS.
+scratch, never silently dropped. Unlike incremental updates
+(app.services.update_service), backfill has no RSS fallback: RSS can't
+satisfy a count/date target on its own, since it only ever returns the ~15
+most recent items.
 """
 
 import logging
@@ -84,7 +84,7 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
                     strict_shorts=settings.strict_shorts_detection,
                 )
 
-            page = await key_pool.call_with_key_rotation(session, "background", _call)
+            page = await key_pool.call_with_key_rotation(session, _call)
 
             new_count = await upsert_uploads(session, channel, page.items, fetched_via="api")
             task.fetched_count += new_count

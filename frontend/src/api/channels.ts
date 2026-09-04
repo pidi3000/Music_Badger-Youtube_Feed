@@ -17,8 +17,6 @@ export interface Channel {
   subscription_status: 'subscribed' | 'unsubscribed';
   unsubscribed_at: string | null;
   unsubscribed_ack: boolean;
-  upload_fetch_method: 'api' | 'rss' | null;
-  effective_fetch_method: 'api' | 'rss';
   backfill_completed_at: string | null;
   backfill_status: 'not_started' | 'queued' | 'in_progress' | 'paused_quota' | 'completed' | 'failed';
   upload_count: number;
@@ -38,7 +36,6 @@ export interface GetChannelsQuery {
   untagged?: boolean;
   source?: 'manual' | 'subscription';
   status?: 'subscribed' | 'unsubscribed';
-  fetch_method?: 'api' | 'rss';
   search?: string;
   sort?: ChannelSort;
   order?: 'asc' | 'desc';
@@ -50,7 +47,6 @@ export async function getChannels(query?: GetChannelsQuery): Promise<Channel[]> 
   if (query?.untagged) params.append('untagged', 'true');
   if (query?.source) params.append('source', query.source);
   if (query?.status) params.append('status', query.status);
-  if (query?.fetch_method) params.append('fetch_method', query.fetch_method);
   if (query?.search) params.append('search', query.search);
   if (query?.sort) params.append('sort', query.sort);
   if (query?.order) params.append('order', query.order);
@@ -66,7 +62,6 @@ export async function getChannel(id: number): Promise<Channel> {
 export async function createChannel(payload: {
   channel_link: string;
   tag_ids?: number[];
-  upload_fetch_method?: 'api' | 'rss';
 }): Promise<Channel> {
   return apiCall('/api/channels', {
     method: 'POST',
@@ -76,7 +71,7 @@ export async function createChannel(payload: {
 
 export async function updateChannel(
   id: number,
-  payload: Partial<{ tag_ids: number[]; upload_fetch_method: 'api' | 'rss' | null }>,
+  payload: Partial<{ tag_ids: number[] }>,
 ): Promise<Channel> {
   return apiCall(`/api/channels/${id}`, {
     method: 'PATCH',
@@ -127,7 +122,7 @@ export function useCreateChannel() {
 export function useUpdateChannel() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: Partial<{ tag_ids: number[]; upload_fetch_method: 'api' | 'rss' | null }> }) =>
+    mutationFn: ({ id, payload }: { id: number; payload: Partial<{ tag_ids: number[] }> }) =>
       updateChannel(id, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['channels'] });
