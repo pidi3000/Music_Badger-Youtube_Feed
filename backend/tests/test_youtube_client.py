@@ -12,6 +12,18 @@ import pytest
 
 from app.services import youtube_client
 
+
+@pytest.fixture(autouse=True)
+def _reset_shorts_check_breaker():
+    """The circuit breaker for the strict-Shorts check is module-level
+    state (it needs to persist across calls within one real sync/backfill
+    run, not just one classify_video_types call) — reset it around every
+    test so one test's inconclusive results can't trip the breaker for an
+    unrelated later test."""
+    youtube_client.shorts_check_breaker.reset()
+    yield
+    youtube_client.shorts_check_breaker.reset()
+
 CHANNEL_RESPONSE = {
     "kind": "youtube#channelListResponse",
     "items": [
@@ -556,6 +568,79 @@ async def testclassify_video_types_strict_on_skips_live_videos():
 
     assert _types_only(classifications) == {"vid1": "live"}
     assert call_log == []
+
+
+@pytest.mark.asyncio
+async def testclassify_video_types_strict_on_checks_multiple_candidates_concurrently():
+    """A page with several short-candidate videos must check all of them,
+    not just the first — and must not serialize them one after another
+    (the whole point of running them concurrently is to bound the wall
+    time for a page regardless of how many candidates it has)."""
+    response = {
+        "items": [
+            {"id": f"vid{i}", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}
+            for i in range(6)
+        ]
+    }
+    statuses = {f"vid{i}": 200 if i % 2 == 0 else 302 for i in range(6)}
+    client, call_log = _mock_client_with_shorts_redirect(response, statuses)
+    async with client:
+        classifications = await youtube_client.classify_video_types(client, "fake-key", list(statuses), strict_shorts=True)
+
+    assert len(call_log) == 6
+    for i in range(6):
+        expected = "short" if i % 2 == 0 else "video"
+        assert classifications[f"vid{i}"].video_type == expected
+        assert classifications[f"vid{i}"].verified is True
+
+
+@pytest.mark.asyncio
+async def testclassify_video_types_breaker_trips_after_consecutive_inconclusive_results():
+    """Repeated inconclusive checks (e.g. every request landing on a
+    consent/interstitial page instead of a real answer) must eventually
+    disable the strict check for a while rather than keep paying for a
+    request per candidate — that's what stops one bad patch of channels
+    from stalling everything downstream of it."""
+    response = {
+        "items": [{"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}]
+    }
+    client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 500})  # always inconclusive
+    async with client:
+        for _ in range(youtube_client.shorts_check_breaker.threshold):
+            await youtube_client.classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+        assert len(call_log) == youtube_client.shorts_check_breaker.threshold
+        assert youtube_client.shorts_check_breaker.is_open()
+
+        # Breaker is now open — no further request should be made at all,
+        # and classification must still fall back to the duration heuristic.
+        classifications = await youtube_client.classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+
+    assert len(call_log) == youtube_client.shorts_check_breaker.threshold  # unchanged, no new request
+    assert classifications["vid1"].video_type == "short"  # PT45S duration heuristic
+    assert classifications["vid1"].verified is False
+
+
+@pytest.mark.asyncio
+async def testclassify_video_types_conclusive_result_resets_the_breaker():
+    response = {
+        "items": [{"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}]
+    }
+    client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 500})
+    async with client:
+        for _ in range(youtube_client.shorts_check_breaker.threshold - 1):
+            await youtube_client.classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+        assert not youtube_client.shorts_check_breaker.is_open()
+
+        # A conclusive result in between must reset the consecutive count,
+        # so one flaky patch doesn't combine with an unrelated later one.
+        conclusive_client, _ = _mock_client_with_shorts_redirect(response, {"vid1": 200})
+        async with conclusive_client:
+            await youtube_client.classify_video_types(conclusive_client, "fake-key", ["vid1"], strict_shorts=True)
+
+        for _ in range(youtube_client.shorts_check_breaker.threshold - 1):
+            await youtube_client.classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+
+    assert not youtube_client.shorts_check_breaker.is_open()
 
 
 @pytest.mark.asyncio

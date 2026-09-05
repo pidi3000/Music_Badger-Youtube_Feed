@@ -5,11 +5,12 @@ and easy to mock in tests). Every call takes either an `api_key` or an
 like `subscriptions.list`) — never both.
 """
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass, field, replace
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -219,6 +220,56 @@ class VideoClassification:
     verified: bool = False
 
 
+# How many strict-mode redirect checks run at once per classify_video_types
+# call. Sequential (one at a time) meant a single page of up to 50
+# candidates could take up to 50x this check's own timeout end to end —
+# easily minutes, and multiplied across every page of every channel in a
+# subscription sync, that reads as the whole sync having stalled.
+_SHORTS_CHECK_CONCURRENCY = 8
+
+
+class _ShortsCheckBreaker:
+    """Trips after too many consecutive inconclusive strict-mode checks —
+    a sign the endpoint is currently blocking or throttling this app (a
+    persistent consent/interstitial redirect, rate-limiting, etc.) rather
+    than genuinely answering "not a Short" for every video in a row. While
+    tripped, classify_video_types skips the check entirely and falls back
+    to the duration heuristic, so a bad patch costs a handful of requests
+    instead of one per candidate for the rest of the run."""
+
+    def __init__(self, threshold: int = 5, cooldown: timedelta = timedelta(minutes=5)) -> None:
+        self.threshold = threshold
+        self.cooldown = cooldown
+        self._consecutive_inconclusive = 0
+        self._disabled_until: datetime | None = None
+
+    def is_open(self) -> bool:
+        return self._disabled_until is not None and datetime.utcnow() < self._disabled_until
+
+    def record(self, result: bool | None) -> None:
+        if result is not None:
+            self._consecutive_inconclusive = 0
+            self._disabled_until = None
+            return
+        self._consecutive_inconclusive += 1
+        if self._consecutive_inconclusive >= self.threshold and self._disabled_until is None:
+            self._disabled_until = datetime.utcnow() + self.cooldown
+            logger.warning(
+                "strict Shorts check got %d consecutive inconclusive results — disabling it for %s "
+                "(looks like a persistent block/rate-limit rather than bad luck), falling back to the "
+                "duration heuristic until then",
+                self._consecutive_inconclusive,
+                self.cooldown,
+            )
+
+    def reset(self) -> None:
+        self._consecutive_inconclusive = 0
+        self._disabled_until = None
+
+
+shorts_check_breaker = _ShortsCheckBreaker()
+
+
 async def classify_video_types(
     client: httpx.AsyncClient, api_key: str, video_ids: list[str], strict_shorts: bool = False
 ) -> dict[str, VideoClassification]:
@@ -230,7 +281,10 @@ async def classify_video_types(
     When `strict_shorts` is on, any video that's short enough to *possibly*
     be a Short (<=180s) also gets the extra `_is_actual_short` check —
     costs no API quota, but one extra HTTP request per such video, which is
-    why it's opt-in and duration-gated rather than applied to everything."""
+    why it's opt-in and duration-gated rather than applied to everything.
+    Those checks run concurrently (bounded) rather than one at a time, and
+    stop altogether for a while if too many in a row come back inconclusive
+    — see `_SHORTS_CHECK_CONCURRENCY` and `_ShortsCheckBreaker` above."""
 
     if not video_ids:
         return {}
@@ -243,6 +297,7 @@ async def classify_video_types(
     )
 
     classifications: dict[str, VideoClassification] = {}
+    candidates: dict[str, VideoClassification] = {}  # video_id -> duration-based fallback
     for item in data.get("items", []):
         video_id = item.get("id")
         if not video_id:
@@ -253,14 +308,28 @@ async def classify_video_types(
             continue
         duration = item.get("contentDetails", {}).get("duration")
         seconds = _parse_duration_seconds(duration) if duration else 0
+        duration_based = VideoClassification("short" if 0 < seconds <= _SHORT_MAX_SECONDS else "video")
 
-        if strict_shorts and 0 < seconds <= _SHORTS_CANDIDATE_MAX_SECONDS:
-            is_short = await _is_actual_short(client, video_id)
+        if strict_shorts and 0 < seconds <= _SHORTS_CANDIDATE_MAX_SECONDS and not shorts_check_breaker.is_open():
+            candidates[video_id] = duration_based
+        else:
+            classifications[video_id] = duration_based
+
+    if candidates:
+        semaphore = asyncio.Semaphore(_SHORTS_CHECK_CONCURRENCY)
+
+        async def _check(video_id: str) -> tuple[str, bool | None]:
+            async with semaphore:
+                return video_id, await _is_actual_short(client, video_id)
+
+        results = await asyncio.gather(*(_check(video_id) for video_id in candidates))
+        for video_id, is_short in results:
+            shorts_check_breaker.record(is_short)
             if is_short is not None:
                 classifications[video_id] = VideoClassification("short" if is_short else "video", verified=True)
-                continue
+            else:
+                classifications[video_id] = candidates[video_id]
 
-        classifications[video_id] = VideoClassification("short" if 0 < seconds <= _SHORT_MAX_SECONDS else "video")
     return classifications
 
 
