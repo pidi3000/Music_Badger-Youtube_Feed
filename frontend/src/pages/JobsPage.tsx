@@ -40,9 +40,17 @@ export default function JobsPage() {
         // runs synchronously during this very useJobs() call, before that
         // destructuring assignment completes, so closing over `jobsData`
         // here hits its temporal dead zone.
+        //
+        // Never returns false: doing so when there's currently nothing
+        // active stops polling for good until something else (a reload, a
+        // filter change) triggers a fresh fetch — so a job that starts
+        // *after* the page loaded with none active (e.g. adding a channel
+        // in another tab, or the scheduled sync firing) would never show up
+        // without a manual reload. A slower baseline poll while idle still
+        // catches that.
         const jobs = query.state.data as Job[] | undefined;
         const hasActiveJob = jobs?.some((job) => ACTIVE_STATUSES.has(job.status));
-        return hasActiveJob ? 5000 : false;
+        return hasActiveJob ? 5000 : 15000;
       },
     },
   );
