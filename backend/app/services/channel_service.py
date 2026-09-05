@@ -87,7 +87,13 @@ async def create_manual_channel(
     settings: AppSettings,
     channel_link: str,
     tag_ids: list[int],
-) -> Channel:
+) -> tuple[Channel, bool]:
+    """Returns (channel, is_new) — `is_new` tells the caller whether it still
+    needs to run quick sync + queue a backfill (see
+    `run_quick_sync_and_enqueue_backfill`); an already-existing channel was
+    already synced when it was first added, so re-running that here would
+    just be wasted work (and duplicate backfill tasks)."""
+
     info = await _resolve_channel_info(session, http_client, channel_link)
 
     result = await session.execute(
@@ -101,13 +107,9 @@ async def create_manual_channel(
         await set_channel_tags(session, existing, tag_ids)
         await session.commit()
         await session.refresh(existing)
-        return existing
+        return existing, False
 
-    # Both network round-trips happen before any write, so the DB's write
-    # lock is only held for the fast burst of inserts below, not across
-    # these HTTP calls too — see update_service.fetch_quick_sync.
     avatar_url = await avatar_store.store_channel_avatar(http_client, info.id, info.thumbnail_url)
-    quick_result = await update_service.fetch_quick_sync(session, http_client, info.id, settings)
 
     channel = Channel(
         youtube_channel_id=info.id,
@@ -119,12 +121,27 @@ async def create_manual_channel(
     )
     session.add(channel)
     await session.flush()
-    await update_service.apply_quick_sync(session, channel, quick_result)
-    await enqueue_backfill_task(session, channel, settings)
     await set_channel_tags(session, channel, tag_ids)
     await session.commit()
     await session.refresh(channel)
-    return channel
+    # The channel row now exists and is committed, so the caller can return
+    # to the client immediately — quick sync (a network fetch) and backfill
+    # queueing happen afterward, out of band, see api/channels.py.
+    return channel, True
+
+
+async def run_quick_sync_and_enqueue_backfill(
+    session: AsyncSession, http_client: httpx.AsyncClient, channel: Channel, settings: AppSettings
+) -> None:
+    """The rest of what a freshly manually-added channel needs — split out
+    of `create_manual_channel` so it can run in the background after the
+    channel row is already committed and the HTTP response has returned,
+    instead of blocking the add-channel request on a network fetch."""
+
+    quick_result = await update_service.fetch_quick_sync(session, http_client, channel.youtube_channel_id, settings)
+    await update_service.apply_quick_sync(session, channel, quick_result)
+    await enqueue_backfill_task(session, channel, settings)
+    await session.commit()
 
 
 @dataclass(frozen=True)

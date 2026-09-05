@@ -82,10 +82,17 @@ async def test_add_channel_by_handle(authed_client, db_session, monkeypatch):
     body = response.json()
     assert body["youtube_channel_id"] == "UCtestchannel1"
     assert body["source"] == "manual"
-    assert body["backfill_status"] == "queued"
+    # The channel row is returned as soon as it's created, before quick sync
+    # and backfill queueing (which happen in the background) have run.
+    assert body["backfill_status"] == "not_started"
 
     listed = await authed_client.get("/api/channels")
     assert len(listed.json()) == 1
+
+    await asyncio.sleep(0.1)
+
+    channel_response = await authed_client.get(f"/api/channels/{body['id']}")
+    assert channel_response.json()["backfill_status"] == "queued"
 
 
 @pytest.mark.asyncio
@@ -120,7 +127,7 @@ async def test_add_channel_stores_avatar_locally_instead_of_hotlinking(authed_cl
 
 
 @pytest.mark.asyncio
-async def test_add_channel_quick_syncs_newest_uploads_immediately(authed_client, db_session, monkeypatch):
+async def test_add_channel_quick_syncs_newest_uploads_in_the_background(authed_client, db_session, monkeypatch):
     db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     await db_session.commit()
 
@@ -142,7 +149,14 @@ async def test_add_channel_quick_syncs_newest_uploads_immediately(authed_client,
     response = await authed_client.post("/api/channels", json={"channel_link": "@quickchan", "tag_ids": []})
     assert response.status_code == 201
     body = response.json()
-    assert body["upload_count"] == 1
+    # Quick sync hasn't run yet — the response comes back as soon as the
+    # channel row exists, not after the (background) upload fetch.
+    assert body["upload_count"] == 0
+
+    await asyncio.sleep(0.1)
+
+    channel_response = await authed_client.get(f"/api/channels/{body['id']}")
+    assert channel_response.json()["upload_count"] == 1
 
 
 @pytest.mark.asyncio

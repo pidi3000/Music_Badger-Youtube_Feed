@@ -1,7 +1,11 @@
+import asyncio
+from collections.abc import Callable
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, status
+import httpx
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.deps import DbSession, HttpClient, RequireAuth
@@ -16,6 +20,7 @@ from app.services.channel_service import (
     create_manual_channel,
     get_upload_stats,
     load_channel,
+    run_quick_sync_and_enqueue_backfill,
     set_channel_tags,
     sort_channels,
 )
@@ -64,11 +69,21 @@ async def list_channels(
     return [channel_to_out(c, stats_by_channel.get(c.id, UploadStats())) for c in channels]
 
 
+async def _run_quick_sync_in_background(
+    db_session_factory: Callable[[], AsyncSession], channel_id: int
+) -> None:
+    async with db_session_factory() as session, httpx.AsyncClient(timeout=30) as client:
+        channel = await session.get(Channel, channel_id)
+        settings = await get_or_create_settings(session)
+        if channel is not None:
+            await run_quick_sync_and_enqueue_backfill(session, client, channel, settings)
+
+
 @router.post("", response_model=ChannelOut, status_code=status.HTTP_201_CREATED)
-async def add_channel(body: ChannelCreate, session: DbSession, http_client: HttpClient):
+async def add_channel(body: ChannelCreate, session: DbSession, http_client: HttpClient, request: Request):
     settings = await get_or_create_settings(session)
     try:
-        channel = await create_manual_channel(session, http_client, settings, body.channel_link, body.tag_ids)
+        channel, is_new = await create_manual_channel(session, http_client, settings, body.channel_link, body.tag_ids)
     except ChannelResolveError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except key_pool.QuotaExhaustedError as exc:
@@ -76,6 +91,13 @@ async def add_channel(body: ChannelCreate, session: DbSession, http_client: Http
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="no active API key available — add one in Settings and try again",
         ) from exc
+
+    if is_new:
+        # Uses the app's own db_session_factory (rather than importing
+        # app.db.async_session_factory directly) so this runs against
+        # whichever database this app instance is actually using — tests
+        # substitute an isolated one, see tests/conftest.py.
+        asyncio.create_task(_run_quick_sync_in_background(request.app.state.db_session_factory, channel.id))
 
     channel = await load_channel(session, channel.id)
     stats = await _stats_for(session, channel.id)
