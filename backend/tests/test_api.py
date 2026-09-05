@@ -1041,6 +1041,72 @@ async def test_stop_job_returns_404_for_an_unknown_or_malformed_job_id(authed_cl
 
 
 @pytest.mark.asyncio
+async def test_stop_all_jobs_stops_every_stoppable_job_across_all_kinds(authed_client, db_session):
+    from app.models import SyncLog, UpdateTask
+
+    channel = Channel(youtube_channel_id="UCstopall1", title="Stop All Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+
+    queued_backfill = BackfillTask(
+        channel_id=channel.id, status="queued", target_min_count=50, target_after=datetime.utcnow().date()
+    )
+    running_backfill = BackfillTask(
+        channel_id=channel.id, status="in_progress", target_min_count=50, target_after=datetime.utcnow().date()
+    )
+    paused_backfill = BackfillTask(
+        channel_id=channel.id, status="paused_quota", target_min_count=50, target_after=datetime.utcnow().date()
+    )
+    done_backfill = BackfillTask(
+        channel_id=channel.id,
+        status="completed",
+        target_min_count=50,
+        target_after=datetime.utcnow().date(),
+        completed_at=datetime.utcnow(),
+    )
+    queued_update = UpdateTask(channel_id=channel.id, status="queued")
+    running_import = SyncLog(status="running")
+    finished_import = SyncLog(status="success", finished_at=datetime.utcnow())
+
+    db_session.add_all(
+        [queued_backfill, running_backfill, paused_backfill, done_backfill, queued_update, running_import, finished_import]
+    )
+    await db_session.commit()
+
+    response = await authed_client.post("/api/jobs/stop-all")
+    assert response.status_code == 200
+    body = response.json()
+    # Immediately stopped: queued_backfill, paused_backfill, queued_update.
+    assert body["stopped"] == 3
+    # Marked "stopping" (actively running, has to notice on its own):
+    # running_backfill, running_import.
+    assert body["stopping"] == 2
+
+    await db_session.refresh(queued_backfill)
+    await db_session.refresh(running_backfill)
+    await db_session.refresh(paused_backfill)
+    await db_session.refresh(done_backfill)
+    await db_session.refresh(queued_update)
+    await db_session.refresh(running_import)
+    await db_session.refresh(finished_import)
+
+    assert queued_backfill.status == "stopped"
+    assert running_backfill.status == "stopping"
+    assert paused_backfill.status == "stopped"
+    assert done_backfill.status == "completed"  # untouched — already finished
+    assert queued_update.status == "stopped"
+    assert running_import.status == "stopping"
+    assert finished_import.status == "success"  # untouched — already finished
+
+
+@pytest.mark.asyncio
+async def test_stop_all_jobs_is_a_no_op_when_nothing_is_running(authed_client, db_session):
+    response = await authed_client.post("/api/jobs/stop-all")
+    assert response.status_code == 200
+    assert response.json() == {"stopped": 0, "stopping": 0}
+
+
+@pytest.mark.asyncio
 async def test_jobs_import_has_no_progress_fields_until_the_total_is_known(authed_client, db_session):
     from app.models import SyncLog
 

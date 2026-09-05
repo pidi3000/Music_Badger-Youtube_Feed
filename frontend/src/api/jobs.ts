@@ -56,3 +56,22 @@ export function useStopJob() {
     },
   });
 }
+
+export interface StopAllJobsResult {
+  stopped: number;
+  stopping: number;
+}
+
+export async function stopAllJobs(): Promise<StopAllJobsResult> {
+  return apiCall<StopAllJobsResult>('/api/jobs/stop-all', { method: 'POST' });
+}
+
+export function useStopAllJobs() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: stopAllJobs,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
+}

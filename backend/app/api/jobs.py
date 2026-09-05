@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.deps import DbSession, RequireAuth
 from app.models import BackfillTask, SyncLog, UpdateTask
-from app.schemas import JobKind, JobOut, JobState
+from app.schemas import JobKind, JobOut, JobState, StopAllJobsResponse
 from app.services.channel_service import channel_to_ref
 
 router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[RequireAuth])
@@ -39,6 +39,15 @@ _STOPPABLE_STATUSES = {"queued", "in_progress", "running", "paused_quota"}
 
 def _state_group(status: str) -> JobState | None:
     return _STATE_GROUPS.get(status)
+
+
+def _next_status_for_stop(current_status: str) -> str:
+    """A queued or quota-paused job hasn't started running yet, so it can
+    be marked "stopped" outright; anything actively running has to notice
+    the request itself at its next safe checkpoint — see the "stopping"
+    check in backfill_service.process_task, update_service.process_task,
+    and sync_service._import_subscriptions."""
+    return "stopped" if current_status in ("queued", "paused_quota") else "stopping"
 
 
 def _backfill_to_job(task: BackfillTask) -> JobOut:
@@ -135,6 +144,31 @@ async def list_jobs(session: DbSession, limit: int = 100, kind: JobKind | None =
     return jobs[:limit]
 
 
+@router.post("/stop-all", response_model=StopAllJobsResponse)
+async def stop_all_jobs(session: DbSession):
+    """Stops every queued/running/paused job across all three kinds in one
+    shot — the panic button for "the server is bogged down, kill
+    everything." Same semantics as stop_job per job: queued/paused_quota
+    jobs are marked stopped immediately, actively-running ones are marked
+    "stopping" and wind down at their own next page boundary."""
+
+    stopped = 0
+    stopping = 0
+
+    for model in (BackfillTask, UpdateTask, SyncLog):
+        result = await session.execute(select(model).where(model.status.in_(_STOPPABLE_STATUSES)))
+        for row in result.scalars():
+            next_status = _next_status_for_stop(row.status)
+            row.status = next_status
+            if next_status == "stopped":
+                stopped += 1
+            else:
+                stopping += 1
+
+    await session.commit()
+    return StopAllJobsResponse(stopped=stopped, stopping=stopping)
+
+
 @router.post("/{job_id}/stop", response_model=JobOut)
 async def stop_job(job_id: str, session: DbSession):
     """Stops a queued job outright, or asks a running one to stop at its
@@ -158,7 +192,7 @@ async def stop_job(job_id: str, session: DbSession):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
         if task.status not in _STOPPABLE_STATUSES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="job is not running or queued")
-        task.status = "stopped" if task.status in ("queued", "paused_quota") else "stopping"
+        task.status = _next_status_for_stop(task.status)
         await session.commit()
         await session.refresh(task, attribute_names=["channel"])
         return _backfill_to_job(task)
@@ -172,7 +206,7 @@ async def stop_job(job_id: str, session: DbSession):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
         if task.status not in _STOPPABLE_STATUSES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="job is not running or queued")
-        task.status = "stopped" if task.status in ("queued", "paused_quota") else "stopping"
+        task.status = _next_status_for_stop(task.status)
         await session.commit()
         await session.refresh(task, attribute_names=["channel"])
         return _update_task_to_job(task)

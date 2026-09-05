@@ -233,3 +233,11 @@ class JobOut(BaseModel):
     # Only set for kind="backfill" — the id to POST to
     # /api/backfill-tasks/{id}/retry.
     backfill_task_id: int | None = None
+
+
+class StopAllJobsResponse(BaseModel):
+    # Queued/paused_quota jobs, stopped immediately.
+    stopped: int
+    # Actively running jobs, marked "stopping" — they'll finish winding
+    # down at their own next page boundary.
+    stopping: int

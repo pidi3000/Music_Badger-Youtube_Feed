@@ -2,11 +2,45 @@
   max-width: 1000px;
 }
 
+.jobs-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
 .jobs-subtitle {
   color: var(--text-light);
   margin-top: -20px;
   margin-bottom: 25px;
   font-size: 14px;
+}
+
+.stop-all-btn {
+  flex-shrink: 0;
+  padding: 10px 16px;
+  font-size: 13px;
+  background: var(--danger);
+  color: white;
+}
+
+.stop-all-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.stop-all-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .jobs-header {
+    flex-direction: column;
+  }
+
+  .stop-all-btn {
+    width: 100%;
+  }
 }
 
 .jobs-filter-bar {

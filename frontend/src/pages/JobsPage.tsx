@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useJobs, useStopJob, Job, JobKind, JobState } from '../api/jobs';
+import { useJobs, useStopJob, useStopAllJobs, Job, JobKind, JobState } from '../api/jobs';
 import { useRetryBackfillTask } from '../api/backfill';
 import { useToast } from '../context/ToastContext';
 import { getErrorMessage } from '../utils/errors';
@@ -57,8 +57,9 @@ export default function JobsPage() {
 
   const retryMutation = useRetryBackfillTask();
   const stopMutation = useStopJob();
+  const stopAllMutation = useStopAllJobs();
   const [stoppingJobId, setStoppingJobId] = useState<string | null>(null);
-  const { showError } = useToast();
+  const { showError, showSuccess } = useToast();
 
   const handleRetryBackfill = async (backfillTaskId: number) => {
     try {
@@ -79,13 +80,45 @@ export default function JobsPage() {
     }
   };
 
+  const handleStopAll = async () => {
+    // Stops every stoppable job site-wide, regardless of the kind/state
+    // filters currently applied to this view — the confirm text says so
+    // explicitly rather than quoting the (filtered) count shown above.
+    if (!confirm("Stop every active and queued job — backfills, upload updates, and subscription syncs — across the whole app? This can't be undone.")) {
+      return;
+    }
+    try {
+      const result = await stopAllMutation.mutateAsync();
+      const total = result.stopped + result.stopping;
+      showSuccess(
+        total === 0
+          ? 'Nothing to stop'
+          : `Stopped ${result.stopped} immediately, ${result.stopping} winding down`,
+      );
+    } catch (err) {
+      showError(getErrorMessage(err, 'Failed to stop all jobs'));
+    }
+  };
+
   const jobs = jobsData as Job[] | undefined;
   const activeCount = jobs?.filter((j) => ACTIVE_STATUSES.has(j.status)).length || 0;
 
   return (
     <div className="jobs-page">
-      <h1>Jobs</h1>
-      <p className="jobs-subtitle">Backfill, upload updates, and subscription imports.</p>
+      <div className="jobs-header">
+        <div>
+          <h1>Jobs</h1>
+          <p className="jobs-subtitle">Backfill, upload updates, and subscription imports.</p>
+        </div>
+        <button
+          type="button"
+          className="stop-all-btn"
+          onClick={handleStopAll}
+          disabled={stopAllMutation.isPending}
+        >
+          {stopAllMutation.isPending ? 'Stopping...' : 'Stop All Jobs'}
+        </button>
+      </div>
 
       <div className="jobs-filter-bar">
         {KIND_FILTERS.map((f) => (
