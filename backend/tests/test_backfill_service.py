@@ -296,6 +296,40 @@ async def test_stop_request_between_pages_halts_before_the_next_fetch(db_session
 
 
 @pytest.mark.asyncio
+async def test_in_progress_transition_is_committed_before_the_first_page_fetch(
+    db_session, db_session_factory, monkeypatch
+):
+    """The "in_progress" transition must be committed, not just flushed,
+    before the loop's first network call — a flush leaves it uncommitted,
+    holding SQLite's write lock for as long as that call takes (which, with
+    strict Shorts detection on, can be tens of seconds per page). A
+    separate connection must see the committed row while the first page's
+    fetch is still in flight, not just after process_task returns."""
+
+    channel = await make_channel(db_session)
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
+    await db_session.commit()
+
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=1, days=365))
+    await db_session.commit()
+
+    visible_status_during_fetch = None
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        nonlocal visible_status_during_fetch
+        async with db_session_factory() as other_session:
+            other_task = await other_session.get(BackfillTask, task.id)
+            visible_status_during_fetch = other_task.status
+        return make_page([("v1", datetime.utcnow())], next_token=None)
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    await backfill_service.process_task(db_session, http_client=None, task=task)
+
+    assert visible_status_during_fetch == "in_progress"
+
+
+@pytest.mark.asyncio
 async def test_worker_tick_processes_queued_and_paused_but_not_completed(db_session, monkeypatch):
     channel_a = await make_channel(db_session, "UCaaa")
     channel_b = await make_channel(db_session, "UCbbb")

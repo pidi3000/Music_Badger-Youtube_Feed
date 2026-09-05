@@ -69,7 +69,13 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
     task.status = "in_progress"
     task.started_at = task.started_at or datetime.utcnow()
     task.attempts += 1
-    await session.flush()
+    # Commits (not just flushes) this transition before the loop's first
+    # network call — a flush leaves the write uncommitted, holding
+    # SQLite's write lock for as long as that call takes. With strict
+    # Shorts detection on, the first page alone can take tens of seconds
+    # (up to 8 concurrent redirect checks per candidate video), which was
+    # blocking every other write in the app for that whole stretch.
+    await session.commit()
 
     try:
         while True:

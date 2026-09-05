@@ -50,7 +50,11 @@ async def _reactivate_expired_keys(session: AsyncSession) -> None:
     for key in result.scalars():
         key.status = "active"
         key.quota_resets_at = None
-    await session.flush()
+    # Commits (not just flushes): this runs right before call_with_key_rotation's
+    # network call, so a flush here would leave the write uncommitted —
+    # holding SQLite's write lock for as long as that call takes (which, with
+    # strict Shorts detection on, can be tens of seconds).
+    await session.commit()
 
 
 async def get_active_key(session: AsyncSession) -> ApiKey | None:
@@ -66,13 +70,16 @@ async def get_active_key(session: AsyncSession) -> ApiKey | None:
 
 async def mark_key_used(session: AsyncSession, key: ApiKey) -> None:
     key.last_used_at = datetime.utcnow()
-    await session.flush()
+    await session.commit()
 
 
 async def mark_key_exhausted(session: AsyncSession, key: ApiKey) -> None:
     key.status = "exhausted"
     key.quota_resets_at = next_quota_reset_utc()
-    await session.flush()
+    # Commits (not just flushes): on a 403 quotaExceeded, call_with_key_rotation
+    # loops right back into another network call (the next key) — same
+    # reasoning as _reactivate_expired_keys above.
+    await session.commit()
 
 
 async def call_with_key_rotation(session: AsyncSession, call: Callable[[str], Awaitable[T]]) -> T:
