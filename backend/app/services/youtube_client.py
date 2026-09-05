@@ -152,14 +152,18 @@ _SHORTS_CHECK_HEADERS = {
     # the video is actually a Short — which previously made every strict
     # check come back "not a short" (a 3xx to the consent flow, mistaken
     # for the "not a Short, redirected to /watch" signal). "CONSENT=YES+1"
-    # is the long-documented way to opt out of that interstitial for an
-    # unauthenticated request.
+    # used to be the documented way to opt out of that interstitial, but
+    # YouTube has since replaced it with the "SOCS" cookie (the same fix
+    # yt-dlp made in https://github.com/yt-dlp/yt-dlp/pull/7774) — CONSENT
+    # alone no longer works and every request redirects to
+    # consent.youtube.com regardless of region. "CAI" is the bare-minimum
+    # "accept all" value.
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "en-US,en;q=0.9",
-    "Cookie": "CONSENT=YES+1",
+    "Cookie": "SOCS=CAI",
 }
 
 

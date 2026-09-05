@@ -426,7 +426,10 @@ async def test_is_actual_short_sends_consent_cookie_and_browser_user_agent():
     interstitial for every request regardless of whether the video is
     actually a Short, making the whole check meaningless (a past bug: every
     video came back "not a short", even ones a duration-only check and
-    manual inspection both agreed were)."""
+    manual inspection both agreed were). The consent cookie is "SOCS", not
+    the older "CONSENT" cookie — YouTube retired that bypass (see
+    yt-dlp/yt-dlp#7774), and CONSENT alone now redirects to
+    consent.youtube.com regardless of region."""
 
     captured_headers: dict[str, str] = {}
 
@@ -437,7 +440,7 @@ async def test_is_actual_short_sends_consent_cookie_and_browser_user_agent():
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         await youtube_client._is_actual_short(client, "vid1")
 
-    assert "consent=yes" in captured_headers.get("cookie", "").lower()
+    assert "socs=cai" in captured_headers.get("cookie", "").lower()
     assert "python-httpx" not in captured_headers.get("user-agent", "").lower()
 
 
