@@ -259,6 +259,43 @@ async def test_pauses_on_quota_exhaustion_and_resumes_from_cursor(db_session, mo
 
 
 @pytest.mark.asyncio
+async def test_stop_request_between_pages_halts_before_the_next_fetch(db_session, monkeypatch):
+    """A "stopping" request (see api/jobs.py's stop_job) must be honored at
+    the next page boundary, not ignored until the whole backfill target is
+    met — this is what makes a "Stop" button on a stuck job actually work
+    rather than just marking it stopped in the UI while it keeps running."""
+
+    channel = await make_channel(db_session)
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
+    await db_session.commit()
+
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=10, days=365))
+    await db_session.commit()
+
+    now = datetime.utcnow()
+    call_count = 0
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Simulates a stop request committed by a different
+            # session/request while this page's network call was in flight.
+            task.status = "stopping"
+            return make_page([("v1", now)], next_token="p2")
+        pytest.fail("must not fetch another page once a stop was requested")
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    await backfill_service.process_task(db_session, http_client=None, task=task)
+
+    await db_session.refresh(task)
+    assert task.status == "stopped"
+    assert task.fetched_count == 1  # page 1's progress is kept, not discarded
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_worker_tick_processes_queued_and_paused_but_not_completed(db_session, monkeypatch):
     channel_a = await make_channel(db_session, "UCaaa")
     channel_b = await make_channel(db_session, "UCbbb")

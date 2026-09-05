@@ -1,4 +1,4 @@
-import { useQuery, UseQueryOptions } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, UseQueryOptions } from '@tanstack/react-query';
 import { apiCall } from './client';
 
 export type JobKind = 'update' | 'backfill' | 'import_subscriptions';
@@ -40,5 +40,19 @@ export function useJobs(query?: JobsQuery, options?: Omit<UseQueryOptions, 'quer
     queryKey: ['jobs', query],
     queryFn: () => getJobs(query),
     ...options,
+  });
+}
+
+export async function stopJob(jobId: string): Promise<Job> {
+  return apiCall<Job>(`/api/jobs/${jobId}/stop`, { method: 'POST' });
+}
+
+export function useStopJob() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: stopJob,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
   });
 }

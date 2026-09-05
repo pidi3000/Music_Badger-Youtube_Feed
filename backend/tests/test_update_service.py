@@ -81,6 +81,40 @@ async def test_stops_paginating_once_a_page_yields_no_new_uploads(db_session, mo
 
 
 @pytest.mark.asyncio
+async def test_stop_request_between_pages_halts_before_the_next_fetch(db_session, monkeypatch):
+    """A "stopping" request (see api/jobs.py's stop_job) must be honored at
+    the next page boundary rather than ignored until the task's own
+    completion criteria are met."""
+
+    channel = await make_channel(db_session)
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
+    await db_session.commit()
+
+    task = await update_service.enqueue_update_task(db_session, channel)
+    await db_session.commit()
+
+    now = datetime.utcnow()
+    call_count = 0
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            task.status = "stopping"
+            return make_page([("v1", now)], next_token="p2")
+        pytest.fail("must not fetch another page once a stop was requested")
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    await update_service.process_task(db_session, http_client=None, task=task)
+
+    await db_session.refresh(task)
+    assert task.status == "stopped"
+    assert task.fetched_count == 1
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_stops_once_no_more_pages(db_session, monkeypatch):
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))

@@ -5,6 +5,8 @@ import '../styles/job-row.css';
 interface JobRowProps {
   job: Job;
   onRetryBackfill: (backfillTaskId: number) => void;
+  onStop: (jobId: string) => void;
+  isStopping: boolean;
 }
 
 const KIND_LABELS: Record<Job['kind'], string> = {
@@ -22,6 +24,8 @@ const STATUS_LABELS: Record<string, string> = {
   running: 'Running',
   success: 'Success',
   error: 'Error',
+  stopping: 'Stopping...',
+  stopped: 'Stopped',
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -33,6 +37,8 @@ const STATUS_COLORS: Record<string, string> = {
   success: '#34d399',
   failed: '#ef4444',
   error: '#ef4444',
+  stopping: '#9ca3af',
+  stopped: '#9ca3af',
 };
 
 const PROGRESS_UNIT: Record<Job['kind'], string> = {
@@ -41,8 +47,13 @@ const PROGRESS_UNIT: Record<Job['kind'], string> = {
   update: '',
 };
 
-export default function JobRow({ job, onRetryBackfill }: JobRowProps) {
+// Mirrors app/api/jobs.py's _STOPPABLE_STATUSES — a job already finished
+// (or already on its way out) has nothing left to stop.
+const STOPPABLE_STATUSES = new Set(['queued', 'in_progress', 'running', 'paused_quota']);
+
+export default function JobRow({ job, onRetryBackfill, onStop, isStopping }: JobRowProps) {
   const canRetry = job.kind === 'backfill' && job.status === 'failed' && job.backfill_task_id !== null;
+  const canStop = STOPPABLE_STATUSES.has(job.status);
   const progress =
     job.target_min_count != null
       ? Math.min(((job.fetched_count ?? 0) / job.target_min_count) * 100, 100)
@@ -66,6 +77,16 @@ export default function JobRow({ job, onRetryBackfill }: JobRowProps) {
         >
           {STATUS_LABELS[job.status] || job.status}
         </span>
+        {canStop && (
+          <button
+            type="button"
+            className="job-stop-btn"
+            onClick={() => onStop(job.id)}
+            disabled={isStopping || job.status === 'stopping'}
+          >
+            {job.status === 'stopping' ? 'Stopping...' : 'Stop'}
+          </button>
+        )}
       </div>
 
       {progress !== null && (

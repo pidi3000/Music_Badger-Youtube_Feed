@@ -27,6 +27,12 @@ from app.config import get_config
 logger = logging.getLogger(__name__)
 
 
+class SyncStoppedError(Exception):
+    """Raised internally when a stop request (see api/jobs.py's stop_job)
+    is noticed mid-import, so run_sync can record status="stopped" instead
+    of treating it as a failure."""
+
+
 async def _get_access_token(http_client: httpx.AsyncClient, settings: AppSettings) -> str | None:
     if not settings.youtube_refresh_token_encrypted:
         return None
@@ -70,6 +76,15 @@ async def _import_subscriptions(
             await session.commit()
 
         for entry in page.items:
+            # Picks up a stop request made from a different session/request
+            # while this loop was mid-flight — see api/jobs.py's stop_job.
+            # The commit at the bottom of the previous entry (or of the
+            # total_subscriptions write above, for the very first one) is
+            # what makes an external "stopping" write visible here.
+            await session.refresh(log, attribute_names=["status"])
+            if log.status in ("stopping", "stopped"):
+                raise SyncStoppedError()
+
             remote_channel_ids.add(entry.channel_id)
             local = local_channels.get(entry.channel_id)
             if local is None:
@@ -157,6 +172,10 @@ async def run_sync(session: AsyncSession, http_client: httpx.AsyncClient, log: S
 
         log.status = "success"
         log.error = None
+    except SyncStoppedError:
+        log.status = "stopped"
+        log.error = None
+        logger.info("sync log %s stopped by request", log.id)
     except Exception as exc:  # noqa: BLE001 - recorded on the log for the UI/API
         log.status = "error"
         log.error = str(exc)

@@ -56,6 +56,25 @@
   white-space: nowrap;
 }
 
+.job-stop-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  background: var(--bg-light);
+  color: var(--text);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.job-stop-btn:hover:not(:disabled) {
+  background: var(--border);
+}
+
+.job-stop-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .job-progress {
   display: flex;
   flex-direction: column;
@@ -129,6 +148,10 @@
 
   .job-status-badge {
     margin-left: 0;
+  }
+
+  .job-stop-btn {
+    width: 100%;
   }
 
   .error-info {

@@ -134,6 +134,62 @@ async def test_import_subscriptions_commits_per_page_so_progress_is_visible_imme
 
 
 @pytest.mark.asyncio
+async def test_stop_request_between_pages_halts_the_import(db_session, monkeypatch):
+    """A "stopping" request (see api/jobs.py's stop_job) must be honored at
+    the next page boundary, not ignored until every subscriptions.list page
+    has been walked — this is what makes a "Stop" button on a stalled sync
+    actually work."""
+
+    settings = await get_or_create_settings(db_session)
+    settings.youtube_refresh_token_encrypted = encrypt("fake-refresh-token")
+    await db_session.commit()
+
+    monkeypatch.setattr(oauth, "refresh_access_token", fake_refresh_access_token)
+
+    log = SyncLog(status="running")
+    db_session.add(log)
+    await db_session.flush()
+
+    call_count = 0
+
+    async def fake_list_my_subscriptions(client, access_token, page_token=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return youtube_client.Page(
+                items=[youtube_client.SubscriptionEntry(channel_id="UCfirst", title="First", thumbnail_url=None)],
+                next_page_token="page2",
+            )
+        # Simulates a stop request committed by a different session/request
+        # while this page's network call was in flight — actually committed
+        # (not just set in memory), since the code under test picks it up
+        # via session.refresh(), which reads the persisted row.
+        log.status = "stopping"
+        await db_session.commit()
+        return youtube_client.Page(
+            items=[youtube_client.SubscriptionEntry(channel_id="UCsecond", title="Second", thumbnail_url=None)],
+            next_page_token=None,
+        )
+
+    monkeypatch.setattr(youtube_client, "list_my_subscriptions", fake_list_my_subscriptions)
+
+    async def fake_fetch_uploads_feed(client, youtube_channel_id):
+        return []
+
+    monkeypatch.setattr(rss, "fetch_uploads_feed", fake_fetch_uploads_feed)
+
+    await sync_service.run_sync(db_session, http_client=None, log=log)
+
+    await db_session.refresh(log)
+    assert log.status == "stopped"
+    assert log.channels_added == 1  # first page's channel kept
+
+    result = await db_session.execute(select(Channel))
+    ids = {c.youtube_channel_id for c in result.scalars()}
+    assert ids == {"UCfirst"}  # second page's channel was never processed
+
+
+@pytest.mark.asyncio
 async def test_import_subscriptions_commits_each_new_channel_immediately_not_at_page_end(
     db_session, db_session_factory, monkeypatch
 ):

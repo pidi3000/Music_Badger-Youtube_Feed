@@ -10,8 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 FetchMethod = Literal["api", "rss"]
 ApiKeyStatus = Literal["active", "exhausted", "disabled"]
-BackfillStatus = Literal["not_started", "queued", "in_progress", "paused_quota", "completed", "failed"]
-SyncStatus = Literal["running", "success", "error"]
+BackfillStatus = Literal[
+    "not_started", "queued", "in_progress", "paused_quota", "completed", "failed", "stopping", "stopped"
+]
+SyncStatus = Literal["running", "success", "error", "stopping", "stopped"]
 
 
 # ---------------------------------------------------------------- auth ----
@@ -167,7 +169,7 @@ class ApiKeyUpdate(BaseModel):
 class BackfillTaskOut(BaseModel):
     id: int
     channel: ChannelRef
-    status: Literal["queued", "in_progress", "paused_quota", "completed", "failed"]
+    status: Literal["queued", "in_progress", "paused_quota", "completed", "failed", "stopping", "stopped"]
     fetched_count: int
     target_min_count: int
     target_after: date

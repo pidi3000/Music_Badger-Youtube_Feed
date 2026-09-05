@@ -94,6 +94,20 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
 
     try:
         while True:
+            # Picks up a stop request made from a different session/request
+            # while this loop was mid-flight — see api/jobs.py's stop_job.
+            # The commit at the bottom of the previous iteration (or the
+            # flush just above, for the very first one) is what makes an
+            # external "stopping" write visible here.
+            if task.status in ("stopping", "stopped"):
+                # Also treated as "stopped" already set directly (a narrow
+                # race: the stop request read status="queued" and wrote
+                # "stopped" straight away just as this loop's own
+                # transition to "in_progress" committed) — never overwrite
+                # an external stop with our own progress either way.
+                task.status = "stopped"
+                break
+
             cursor = task.resume_cursor
 
             async def _call(api_key: str, _cursor: str | None = cursor) -> youtube_client.Page:
@@ -124,7 +138,6 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
                     task.oldest_fetched_published_at = oldest_in_page
 
             task.resume_cursor = page.next_page_token
-            await session.flush()
 
             no_new_uploads = new_count == 0
             no_more_pages = page.next_page_token is None
@@ -138,6 +151,13 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
                 task.completed_at = datetime.utcnow()
                 task.resume_cursor = None
                 break
+
+            # Commits (not just flushes) this page's progress and ends the
+            # transaction, so the stop-check at the top of the next
+            # iteration can actually see a "stopping" write made by a
+            # different request in the meantime — see the comment there.
+            await session.commit()
+            await session.refresh(task, attribute_names=["status"])
     except Exception as exc:  # noqa: BLE001 - persisted for the Jobs page, re-raised is not useful here
         task.status = "failed"
         task.last_error = str(exc)

@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { useJobs, Job, JobKind, JobState } from '../api/jobs';
+import { useJobs, useStopJob, Job, JobKind, JobState } from '../api/jobs';
 import { useRetryBackfillTask } from '../api/backfill';
 import { useToast } from '../context/ToastContext';
 import { getErrorMessage } from '../utils/errors';
 import JobRow from '../components/JobRow';
 import '../styles/jobs.css';
 
-const ACTIVE_STATUSES = new Set(['queued', 'in_progress', 'paused_quota', 'running']);
+const ACTIVE_STATUSES = new Set(['queued', 'in_progress', 'paused_quota', 'running', 'stopping']);
 
 const KIND_FILTERS: { value: JobKind | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -56,6 +56,8 @@ export default function JobsPage() {
   );
 
   const retryMutation = useRetryBackfillTask();
+  const stopMutation = useStopJob();
+  const [stoppingJobId, setStoppingJobId] = useState<string | null>(null);
   const { showError } = useToast();
 
   const handleRetryBackfill = async (backfillTaskId: number) => {
@@ -63,6 +65,17 @@ export default function JobsPage() {
       await retryMutation.mutateAsync(backfillTaskId);
     } catch (err) {
       showError(getErrorMessage(err, 'Failed to retry backfill task'));
+    }
+  };
+
+  const handleStop = async (jobId: string) => {
+    setStoppingJobId(jobId);
+    try {
+      await stopMutation.mutateAsync(jobId);
+    } catch (err) {
+      showError(getErrorMessage(err, 'Failed to stop job'));
+    } finally {
+      setStoppingJobId(null);
     }
   };
 
@@ -113,7 +126,13 @@ export default function JobsPage() {
       ) : (
         <div className="jobs-list">
           {jobs.map((job) => (
-            <JobRow key={job.id} job={job} onRetryBackfill={handleRetryBackfill} />
+            <JobRow
+              key={job.id}
+              job={job}
+              onRetryBackfill={handleRetryBackfill}
+              onStop={handleStop}
+              isStopping={stoppingJobId === job.id}
+            />
           ))}
         </div>
       )}

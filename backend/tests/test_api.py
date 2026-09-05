@@ -838,6 +838,109 @@ async def test_jobs_shows_a_running_import_with_live_progress_not_as_an_error(au
 
 
 @pytest.mark.asyncio
+async def test_stop_job_marks_a_queued_backfill_task_stopped_immediately(authed_client, db_session):
+    channel = Channel(youtube_channel_id="UCstop1", title="Stop Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+    task = BackfillTask(channel_id=channel.id, status="queued", target_min_count=50, target_after=datetime.utcnow().date())
+    db_session.add(task)
+    await db_session.commit()
+
+    response = await authed_client.post(f"/api/jobs/backfill-{task.id}/stop")
+    assert response.status_code == 200
+    assert response.json()["status"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_stop_job_marks_a_paused_backfill_task_stopped_immediately(authed_client, db_session):
+    channel = Channel(youtube_channel_id="UCstop2", title="Stop Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+    task = BackfillTask(
+        channel_id=channel.id, status="paused_quota", target_min_count=50, target_after=datetime.utcnow().date()
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    response = await authed_client.post(f"/api/jobs/backfill-{task.id}/stop")
+    assert response.status_code == 200
+    assert response.json()["status"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_stop_job_only_signals_an_in_progress_backfill_task(authed_client, db_session):
+    """An in-progress task can't be stopped instantly from the API — its
+    own loop is what has to notice and stop itself at the next page
+    boundary (see backfill_service.process_task) — so the API can only
+    mark it "stopping", not "stopped" outright."""
+
+    channel = Channel(youtube_channel_id="UCstop3", title="Stop Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+    task = BackfillTask(
+        channel_id=channel.id, status="in_progress", target_min_count=50, target_after=datetime.utcnow().date()
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    response = await authed_client.post(f"/api/jobs/backfill-{task.id}/stop")
+    assert response.status_code == 200
+    assert response.json()["status"] == "stopping"
+
+
+@pytest.mark.asyncio
+async def test_stop_job_rejects_an_already_finished_backfill_task(authed_client, db_session):
+    channel = Channel(youtube_channel_id="UCstop4", title="Stop Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+    task = BackfillTask(
+        channel_id=channel.id,
+        status="completed",
+        target_min_count=50,
+        target_after=datetime.utcnow().date(),
+        completed_at=datetime.utcnow(),
+    )
+    db_session.add(task)
+    await db_session.commit()
+
+    response = await authed_client.post(f"/api/jobs/backfill-{task.id}/stop")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_stop_job_works_for_update_tasks_and_sync_imports(authed_client, db_session):
+    from app.models import SyncLog, UpdateTask
+
+    channel = Channel(youtube_channel_id="UCstop5", title="Stop Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+    update_task = UpdateTask(channel_id=channel.id, status="queued")
+    log = SyncLog(status="running")
+    db_session.add_all([update_task, log])
+    await db_session.commit()
+
+    update_response = await authed_client.post(f"/api/jobs/update-{update_task.id}/stop")
+    assert update_response.status_code == 200
+    assert update_response.json()["status"] == "stopped"
+
+    import_response = await authed_client.post(f"/api/jobs/import-{log.id}/stop")
+    assert import_response.status_code == 200
+    assert import_response.json()["status"] == "stopping"
+
+
+@pytest.mark.asyncio
+async def test_stop_job_returns_404_for_an_unknown_or_malformed_job_id(authed_client, db_session):
+    missing = await authed_client.post("/api/jobs/backfill-999999/stop")
+    assert missing.status_code == 404
+
+    malformed = await authed_client.post("/api/jobs/not-a-real-kind-1/stop")
+    assert malformed.status_code == 404
+
+    no_number = await authed_client.post("/api/jobs/backfill-abc/stop")
+    assert no_number.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_jobs_import_has_no_progress_fields_until_the_total_is_known(authed_client, db_session):
     from app.models import SyncLog
 
