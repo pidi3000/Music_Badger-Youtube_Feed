@@ -17,7 +17,11 @@ export default function FeedPage() {
   const [videoTypeFilter, setVideoTypeFilter] = useState<VideoType | undefined>();
   const [cursor, setCursor] = useState<string | null | undefined>();
   const [allItems, setAllItems] = useState<Upload[]>([]);
-  const [hasLoadedInitial, setHasLoadedInitial] = useState(false);
+  // Which cursor's page has already been appended into allItems — guards
+  // against double-appending if that page's query refetches in the
+  // background (staleTime: 0 means every window refocus does) while the
+  // user is still looking at it.
+  const appendedCursorRef = useRef<string | null | undefined>(undefined);
 
   const { data: tagsData } = useTags();
   const { data: feedData, isLoading } = useFeed({
@@ -28,20 +32,26 @@ export default function FeedPage() {
 
   const feed = feedData as FeedResponse | undefined;
 
-  // Load initial items
+  // Keep the first page in sync with every response for it, not just the
+  // first one — background jobs (sync, backfill) keep adding new uploads,
+  // and react-query's staleTime: 0 means a background refetch fires (and
+  // can return newer data) on every mount/refocus. Gating this on "have we
+  // ever loaded once" silently discarded that fresher data, which is why
+  // opening the Feed page didn't always show the newest uploads.
   useEffect(() => {
-    if (feed && !hasLoadedInitial && !cursor) {
+    if (feed && !cursor) {
       setAllItems(feed.items);
-      setHasLoadedInitial(true);
+      appendedCursorRef.current = undefined;
     }
-  }, [feed, hasLoadedInitial, cursor]);
+  }, [feed, cursor]);
 
-  // Append new items when cursor changes
+  // Append a later page exactly once per cursor value.
   useEffect(() => {
-    if (feed && cursor && hasLoadedInitial) {
+    if (feed && cursor && appendedCursorRef.current !== cursor) {
       setAllItems((prev) => [...prev, ...feed.items]);
+      appendedCursorRef.current = cursor;
     }
-  }, [feed, cursor, hasLoadedInitial]);
+  }, [feed, cursor]);
 
   const handleLoadMore = () => {
     if (feed?.next_cursor && !isLoading) {
@@ -72,7 +82,7 @@ export default function FeedPage() {
   const resetPaging = () => {
     setCursor(undefined);
     setAllItems([]);
-    setHasLoadedInitial(false);
+    appendedCursorRef.current = undefined;
   };
 
   const handleTagChange = (id: number | undefined) => {
