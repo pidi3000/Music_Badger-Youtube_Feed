@@ -12,11 +12,17 @@ const VIDEO_TYPE_FILTERS: { value: VideoType | undefined; label: string }[] = [
   { value: 'live', label: 'Live' },
 ];
 
+// Past this many pixels of scroll, the sticky header switches to its
+// compact spacing — small enough to kick in almost as soon as scrolling
+// starts, since the header is stuck to the top from the very first pixel.
+const COMPACT_SCROLL_THRESHOLD = 24;
+
 export default function FeedPage() {
   const [tagFilter, setTagFilter] = useState<number | undefined>();
   const [videoTypeFilter, setVideoTypeFilter] = useState<VideoType | undefined>();
   const [cursor, setCursor] = useState<string | null | undefined>();
   const [allItems, setAllItems] = useState<Upload[]>([]);
+  const [isCompact, setIsCompact] = useState(false);
   // Which cursor's page has already been appended into allItems — guards
   // against double-appending if that page's query refetches in the
   // background (staleTime: 0 means every window refocus does) while the
@@ -79,6 +85,17 @@ export default function FeedPage() {
     return () => observer.disconnect();
   }, [feed?.next_cursor, isLoading]);
 
+  // The page itself scrolls (see layout.css's note on .main-content), so
+  // window scroll position is what drives the sticky header's compact
+  // state — the spacing between title/tags/type-selector tightens once
+  // scrolled, while all three stay pinned together at the top.
+  useEffect(() => {
+    const handleScroll = () => setIsCompact(window.scrollY > COMPACT_SCROLL_THRESHOLD);
+    handleScroll();
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
   const resetPaging = () => {
     setCursor(undefined);
     setAllItems([]);
@@ -95,42 +112,51 @@ export default function FeedPage() {
     resetPaging();
   };
 
+  const hasActiveFilters = tagFilter !== undefined || videoTypeFilter !== undefined;
+
   return (
     <div className="feed-page">
-      <div className="feed-header">
-        <h1>Feed</h1>
-        {feed && <p className="total-uploads">{feed.total_uploads.toLocaleString()} uploads total</p>}
-      </div>
+      <div className={`feed-sticky-header${isCompact ? ' is-compact' : ''}`}>
+        <div className="feed-header">
+          <h1>Feed</h1>
+          {feed && (
+            <p className="total-uploads">
+              {feed.total_uploads.toLocaleString()} upload{feed.total_uploads === 1 ? '' : 's'}
+              {hasActiveFilters ? '' : ' total'}
+            </p>
+          )}
+        </div>
 
-      <div className="tag-filter">
-        <button
-          className={`tag-chip ${!tagFilter ? 'active' : ''}`}
-          onClick={() => handleTagChange(undefined)}
-        >
-          All
-        </button>
-        {tagsData?.map((tag) => (
+        <div className="tag-filter">
           <button
-            key={tag.id}
-            className={`tag-chip ${tagFilter === tag.id ? 'active' : ''}`}
-            onClick={() => handleTagChange(tag.id)}
-            style={tagFilter === tag.id ? { backgroundColor: tag.color, color: '#fff' } : { borderColor: tag.color }}
+            className={`tag-chip ${!tagFilter ? 'active' : ''}`}
+            onClick={() => handleTagChange(undefined)}
           >
-            {tag.name}
+            All
           </button>
-        ))}
-      </div>
+          {tagsData?.map((tag) => (
+            <button
+              key={tag.id}
+              className={`tag-chip ${tagFilter === tag.id ? 'active' : ''}`}
+              onClick={() => handleTagChange(tag.id)}
+              style={tagFilter === tag.id ? { backgroundColor: tag.color, color: '#fff' } : { borderColor: tag.color }}
+            >
+              {tag.name}
+            </button>
+          ))}
+        </div>
 
-      <div className="video-type-filter">
-        {VIDEO_TYPE_FILTERS.map((opt) => (
-          <button
-            key={opt.label}
-            className={`type-chip ${videoTypeFilter === opt.value ? 'active' : ''}`}
-            onClick={() => handleVideoTypeChange(opt.value)}
-          >
-            {opt.label}
-          </button>
-        ))}
+        <div className="video-type-filter">
+          {VIDEO_TYPE_FILTERS.map((opt) => (
+            <button
+              key={opt.label}
+              className={`type-chip ${videoTypeFilter === opt.value ? 'active' : ''}`}
+              onClick={() => handleVideoTypeChange(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="upload-grid">

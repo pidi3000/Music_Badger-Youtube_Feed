@@ -1,12 +1,38 @@
+.feed-sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  padding-top: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s ease;
+}
+
+.feed-sticky-header.is-compact {
+  border-bottom-color: var(--border);
+}
+
 .feed-header {
   display: flex;
   align-items: baseline;
   gap: 12px;
   margin-bottom: 30px;
+  transition: margin-bottom 0.2s ease;
 }
 
 .feed-header h1 {
   margin-bottom: 0;
+  transition: font-size 0.2s ease;
+}
+
+.feed-sticky-header.is-compact .feed-header {
+  margin-bottom: 10px;
+}
+
+.feed-sticky-header.is-compact .feed-header h1 {
+  font-size: 20px;
 }
 
 .total-uploads {
@@ -18,8 +44,13 @@
 .video-type-filter {
   display: flex;
   gap: 8px;
-  margin-bottom: 18px;
+  margin-bottom: 6px;
   flex-wrap: wrap;
+  transition: margin-bottom 0.2s ease;
+}
+
+.feed-sticky-header.is-compact .video-type-filter {
+  margin-bottom: 2px;
 }
 
 .video-type-filter .type-chip {
@@ -44,15 +75,15 @@
 }
 
 .tag-filter {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  background: var(--bg);
-  padding: 12px 0;
   display: flex;
   gap: 10px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
+  transition: margin-bottom 0.2s ease;
+}
+
+.feed-sticky-header.is-compact .tag-filter {
+  margin-bottom: 8px;
 }
 
 .tag-filter .tag-chip {

@@ -26,6 +26,18 @@ def _decode_cursor(cursor: str) -> tuple[datetime, int]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid cursor") from exc
 
 
+def _apply_filters(query, tag_id: int | None, channel_id: int | None, video_type: VideoType | None):
+    if tag_id is not None:
+        query = query.join(Channel, Upload.channel_id == Channel.id).join(
+            ChannelTag, ChannelTag.channel_id == Channel.id
+        ).where(ChannelTag.tag_id == tag_id)
+    if channel_id is not None:
+        query = query.where(Upload.channel_id == channel_id)
+    if video_type is not None:
+        query = query.where(Upload.video_type == video_type)
+    return query
+
+
 @router.get("", response_model=FeedPage)
 async def get_feed(
     session: DbSession,
@@ -37,18 +49,21 @@ async def get_feed(
 ):
     limit = max(1, min(limit, 100))
 
-    query = select(Upload).options(selectinload(Upload.channel)).order_by(
-        Upload.published_at.desc(), Upload.id.desc()
-    )
+    # total_uploads must reflect the same tag/channel/video_type filters as
+    # the page itself (but never the cursor — that's pagination, not a
+    # filter) so the frontend can show "how many uploads match the current
+    # filters", not a constant unfiltered site-wide count.
+    count_query = _apply_filters(select(func.count(Upload.id)), tag_id, channel_id, video_type)
+    total_uploads = (await session.execute(count_query)).scalar_one()
 
-    if tag_id is not None:
-        query = query.join(Channel, Upload.channel_id == Channel.id).join(
-            ChannelTag, ChannelTag.channel_id == Channel.id
-        ).where(ChannelTag.tag_id == tag_id)
-    if channel_id is not None:
-        query = query.where(Upload.channel_id == channel_id)
-    if video_type is not None:
-        query = query.where(Upload.video_type == video_type)
+    query = _apply_filters(
+        select(Upload).options(selectinload(Upload.channel)).order_by(
+            Upload.published_at.desc(), Upload.id.desc()
+        ),
+        tag_id,
+        channel_id,
+        video_type,
+    )
     if cursor is not None:
         cursor_published_at, cursor_id = _decode_cursor(cursor)
         query = query.where(
@@ -58,8 +73,6 @@ async def get_feed(
     query = query.limit(limit + 1)
     result = await session.execute(query)
     uploads = list(result.scalars())
-
-    total_uploads = (await session.execute(select(func.count(Upload.id)))).scalar_one()
     await session.commit()
 
     has_more = len(uploads) > limit

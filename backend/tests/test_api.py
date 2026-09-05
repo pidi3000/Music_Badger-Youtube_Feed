@@ -574,11 +574,57 @@ async def test_feed_total_uploads_and_video_type_filter(authed_client, db_sessio
     shorts_only = await authed_client.get("/api/feed", params={"video_type": "short"})
     shorts_body = shorts_only.json()
     assert [item["youtube_video_id"] for item in shorts_body["items"]] == ["vid-short"]
-    # total_uploads is an app-wide count, unaffected by the filter.
-    assert shorts_body["total_uploads"] == 3
+    # total_uploads reflects the active filter, not an app-wide count.
+    assert shorts_body["total_uploads"] == 1
 
     # ChannelRef now also carries enough to build a real youtube.com link.
     assert all_body["items"][0]["channel"]["youtube_channel_id"] == "UCtypes1"
+
+
+@pytest.mark.asyncio
+async def test_feed_total_uploads_reflects_the_tag_filter(authed_client, db_session):
+    from app.models import Tag
+
+    tagged_channel = Channel(youtube_channel_id="UCtagged1", title="Tagged Chan", source="manual")
+    other_channel = Channel(youtube_channel_id="UCother1", title="Other Chan", source="manual")
+    db_session.add_all([tagged_channel, other_channel])
+    await db_session.flush()
+
+    tag = Tag(name="Music", color="#ff0000")
+    db_session.add(tag)
+    await db_session.flush()
+    db_session.add(ChannelTag(channel_id=tagged_channel.id, tag_id=tag.id))
+
+    now = datetime.utcnow()
+    db_session.add_all(
+        [
+            Upload(
+                channel_id=tagged_channel.id,
+                youtube_video_id="tagged-vid",
+                title="Tagged Upload",
+                published_at=now,
+                thumbnail_url=None,
+                fetched_via="api",
+            ),
+            Upload(
+                channel_id=other_channel.id,
+                youtube_video_id="other-vid",
+                title="Other Upload",
+                published_at=now,
+                thumbnail_url=None,
+                fetched_via="api",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    all_response = await authed_client.get("/api/feed")
+    assert all_response.json()["total_uploads"] == 2
+
+    tag_response = await authed_client.get("/api/feed", params={"tag_id": tag.id})
+    tag_body = tag_response.json()
+    assert tag_body["total_uploads"] == 1
+    assert [item["youtube_video_id"] for item in tag_body["items"]] == ["tagged-vid"]
 
 
 @pytest.mark.asyncio
