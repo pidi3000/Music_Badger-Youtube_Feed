@@ -394,6 +394,25 @@ async def test_is_actual_short_false_on_redirect():
 
 
 @pytest.mark.asyncio
+async def test_is_actual_short_none_on_redirect_to_unrelated_location():
+    """A 3xx only confirms "not a Short" when it actually redirects to that
+    same video's normal watch page. A redirect anywhere else — a
+    consent/interstitial page, a bot-check, a region wall — is a sign the
+    request itself wasn't trusted, not a statement about the video, so it
+    must not be trusted as "confirmed not a Short" either (a past bug: any
+    3xx at all was treated as conclusive, misclassifying real Shorts as
+    normal videos whenever the request hit one of these instead of an
+    actual redirect to /watch)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "https://consent.youtube.com/m?continue=..."}, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await youtube_client._is_actual_short(client, "vid1")
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_is_actual_short_none_on_unexpected_status():
     client, _ = _mock_client_with_shorts_redirect({}, {"vid1": 500})
     async with client:

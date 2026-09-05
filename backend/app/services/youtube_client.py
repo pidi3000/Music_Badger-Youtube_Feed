@@ -5,6 +5,7 @@ and easy to mock in tests). Every call takes either an `api_key` or an
 like `subscriptions.list`) — never both.
 """
 
+import logging
 import re
 from dataclasses import dataclass, field, replace
 
@@ -13,6 +14,8 @@ from datetime import datetime
 import httpx
 
 from app.services.key_pool import YoutubeQuotaExceeded
+
+logger = logging.getLogger(__name__)
 
 API_BASE = "https://www.googleapis.com/youtube/v3"
 
@@ -181,7 +184,25 @@ async def _is_actual_short(client: httpx.AsyncClient, video_id: str) -> bool | N
     if response.status_code == 200:
         return True
     if response.status_code in (301, 302, 303, 307, 308):
-        return False
+        # Only trust this as "confirmed not a Short" when it actually
+        # redirects to that same video's normal watch page — YouTube (or an
+        # intermediary) can also 3xx a request it doesn't trust (bot
+        # detection, a consent/interstitial page, a region wall) regardless
+        # of whether the video is really a Short, and that's a completely
+        # different signal from "this isn't a Short". Treating every
+        # redirect as conclusive previously made strict detection
+        # misclassify real Shorts as normal videos whenever that happened.
+        location = response.headers.get("location", "")
+        if f"watch?v={video_id}" in location or f"watch?v={video_id}&" in location:
+            return False
+        logger.warning(
+            "strict Shorts check for video %s got an unexpected redirect (status %s, location %r) — "
+            "treating as inconclusive",
+            video_id,
+            response.status_code,
+            location,
+        )
+        return None
     return None
 
 
