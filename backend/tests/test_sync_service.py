@@ -428,6 +428,78 @@ async def test_newly_imported_channel_gets_quick_synced_and_backfill_enqueued(db
 
 
 @pytest.mark.asyncio
+async def test_a_single_channels_api_error_does_not_abort_the_whole_import(db_session, monkeypatch):
+    """A 404 "playlist not found" (some channels genuinely have none, or
+    were deleted/terminated) for one new subscription must not abort
+    everything after it — the rest of that page, and any later pages,
+    still need processing. The failing channel is still added (as a real
+    subscription) with no initial uploads rather than silently dropped."""
+
+    from app.encryption import encrypt
+    from app.models import ApiKey, BackfillTask
+
+    settings = await get_or_create_settings(db_session)
+    settings.youtube_refresh_token_encrypted = encrypt("fake-refresh-token")
+    await db_session.commit()
+
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
+    await db_session.commit()
+
+    monkeypatch.setattr(oauth, "refresh_access_token", fake_refresh_access_token)
+
+    async def fake_list_my_subscriptions(client, access_token, page_token=None):
+        return youtube_client.Page(
+            items=[
+                youtube_client.SubscriptionEntry(channel_id="UCbroken", title="Broken Chan", thumbnail_url=None),
+                youtube_client.SubscriptionEntry(channel_id="UCfine", title="Fine Chan", thumbnail_url=None),
+            ],
+            next_page_token=None,
+        )
+
+    monkeypatch.setattr(youtube_client, "list_my_subscriptions", fake_list_my_subscriptions)
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        if "broken" in playlist_id.lower():
+            raise youtube_client.YoutubeApiError(404, "playlist not found")
+        return youtube_client.Page(
+            items=[
+                youtube_client.PlaylistItem(video_id="v1", title="t", published_at=datetime.utcnow(), thumbnail_url=None)
+            ],
+            next_page_token=None,
+        )
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    log = SyncLog(status="running")
+    db_session.add(log)
+    await db_session.flush()
+
+    await sync_service.run_sync(db_session, http_client=None, log=log)
+
+    await db_session.refresh(log)
+    assert log.status == "success"
+    assert log.channels_added == 2
+
+    result = await db_session.execute(select(Channel))
+    by_id = {c.youtube_channel_id: c for c in result.scalars()}
+    assert set(by_id) == {"UCbroken", "UCfine"}
+
+    broken_uploads = list(
+        (await db_session.execute(select(Upload).where(Upload.channel_id == by_id["UCbroken"].id))).scalars()
+    )
+    assert broken_uploads == []
+    fine_uploads = list(
+        (await db_session.execute(select(Upload).where(Upload.channel_id == by_id["UCfine"].id))).scalars()
+    )
+    assert len(fine_uploads) == 1
+
+    # Both still get a BackfillTask queued — the broken one's will
+    # independently retry (and fail visibly) rather than never existing.
+    backfill_tasks = list((await db_session.execute(select(BackfillTask))).scalars())
+    assert {t.channel_id for t in backfill_tasks} == {by_id["UCbroken"].id, by_id["UCfine"].id}
+
+
+@pytest.mark.asyncio
 async def test_run_sync_enqueues_an_update_task_for_every_channel(db_session):
     """Every channel gets a fresh "what's new" update task enqueued each
     cycle, regardless of whether its backfill has completed — gating on

@@ -90,7 +90,29 @@ async def _import_subscriptions(
             if local is None:
                 # Network round-trips first, no DB write pending yet.
                 avatar_url = await avatar_store.store_channel_avatar(http_client, entry.channel_id, entry.thumbnail_url)
-                quick_result = await update_service.fetch_quick_sync(session, http_client, entry.channel_id, settings)
+                try:
+                    quick_result = await update_service.fetch_quick_sync(
+                        session, http_client, entry.channel_id, settings
+                    )
+                except youtube_client.YoutubeApiError as exc:
+                    # A single channel's own API error (e.g. a 404
+                    # "playlist not found" — some channels genuinely have
+                    # none, or the channel was deleted/terminated) must
+                    # never abort the whole import: everything after it in
+                    # this page, and every later page, still needs
+                    # processing. The channel is still added as a real
+                    # subscription with no initial uploads; its BackfillTask
+                    # will independently retry (and fail visibly on the
+                    # Jobs page, with a Retry button) rather than silently
+                    # blocking here forever.
+                    logger.warning(
+                        "quick sync failed for new subscription %s (%s) — adding it with no initial "
+                        "uploads instead of aborting the whole sync: %s",
+                        entry.channel_id,
+                        entry.title,
+                        exc,
+                    )
+                    quick_result = update_service.QuickSyncResult(items=[], fetched_via="none")
 
                 # Now the fast write-and-commit burst.
                 new_channel = Channel(

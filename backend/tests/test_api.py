@@ -160,6 +160,38 @@ async def test_add_channel_quick_syncs_newest_uploads_in_the_background(authed_c
 
 
 @pytest.mark.asyncio
+async def test_add_channel_background_quick_sync_survives_a_youtube_api_error(authed_client, db_session, monkeypatch):
+    """The background quick sync (see api/channels.py's
+    _run_quick_sync_in_background) has nothing waiting on its result, so an
+    unhandled error there (e.g. a 404 "playlist not found") would otherwise
+    vanish silently — leaving the channel with no uploads and, worse, no
+    backfill task ever queued. It must still enqueue the backfill task."""
+
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
+    await db_session.commit()
+
+    async def fake_resolve_by_handle(client, api_key, handle):
+        return youtube_client.ChannelInfo(id="UCbroken1", title="Broken Channel", thumbnail_url=None, handle=handle)
+
+    monkeypatch.setattr(youtube_client, "resolve_channel_by_handle", fake_resolve_by_handle)
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        raise youtube_client.YoutubeApiError(404, "playlist not found")
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    response = await authed_client.post("/api/channels", json={"channel_link": "@brokenchan", "tag_ids": []})
+    assert response.status_code == 201
+    body = response.json()
+
+    await asyncio.sleep(0.1)
+
+    channel_response = await authed_client.get(f"/api/channels/{body['id']}")
+    assert channel_response.json()["upload_count"] == 0
+    assert channel_response.json()["backfill_status"] == "queued"
+
+
+@pytest.mark.asyncio
 async def test_add_channel_with_unparseable_link_returns_400(authed_client, db_session):
     db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
     await db_session.commit()

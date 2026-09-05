@@ -3,6 +3,7 @@ pool — see PROJECT_OUTLINE.md §6) plus shared Channel <-> ChannelOut
 conversion.
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -17,6 +18,8 @@ from app.schemas import ChannelOut, ChannelRef, TagOut
 from app.services import avatar_store, key_pool, update_service, youtube_client
 from app.services.backfill_service import enqueue_backfill_task
 from app.services.channel_parser import ChannelLinkParseError, parse_channel_link
+
+logger = logging.getLogger(__name__)
 
 
 class ChannelResolveError(ValueError):
@@ -138,7 +141,27 @@ async def run_quick_sync_and_enqueue_backfill(
     channel row is already committed and the HTTP response has returned,
     instead of blocking the add-channel request on a network fetch."""
 
-    quick_result = await update_service.fetch_quick_sync(session, http_client, channel.youtube_channel_id, settings)
+    try:
+        quick_result = await update_service.fetch_quick_sync(
+            session, http_client, channel.youtube_channel_id, settings
+        )
+    except youtube_client.YoutubeApiError as exc:
+        # This runs as a fire-and-forget background task (see
+        # api/channels.py) with nothing waiting on its result, so an
+        # unhandled error here wouldn't surface anywhere — the channel
+        # would silently end up with no uploads and no backfill task ever
+        # queued. Fall back to an empty result instead: the channel still
+        # gets its backfill task, which will independently retry (and fail
+        # visibly on the Jobs page, with a Retry button) rather than this
+        # one channel's API error (e.g. a 404 "playlist not found") quietly
+        # leaving it half-set-up forever.
+        logger.warning(
+            "quick sync failed for newly added channel %s — enqueueing its backfill anyway: %s",
+            channel.youtube_channel_id,
+            exc,
+        )
+        quick_result = update_service.QuickSyncResult(items=[], fetched_via="none")
+
     await update_service.apply_quick_sync(session, channel, quick_result)
     await enqueue_backfill_task(session, channel, settings)
     await session.commit()
