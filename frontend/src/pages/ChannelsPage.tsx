@@ -30,6 +30,7 @@ export default function ChannelsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [tagFilterValue, setTagFilterValue] = useState<TagFilterValue>('all');
   const [source, setSource] = useState<'manual' | 'subscription' | undefined>(undefined);
+  const [status, setStatus] = useState<'subscribed' | 'unsubscribed' | undefined>(undefined);
   const [sort, setSort] = useState<ChannelSort>('name');
   const [order, setOrder] = useState<'asc' | 'desc'>('asc');
   const [searchInput, setSearchInput] = useState('');
@@ -48,6 +49,7 @@ export default function ChannelsPage() {
     tag_id: tagId,
     untagged,
     source,
+    status,
     search: search || undefined,
     sort,
     order,
@@ -141,6 +143,15 @@ export default function ChannelsPage() {
           <option value="all">All sources</option>
           <option value="manual">Added manually</option>
           <option value="subscription">Subscribed</option>
+        </select>
+
+        <select
+          value={status ?? 'all'}
+          onChange={(e) => setStatus(e.target.value === 'all' ? undefined : (e.target.value as 'subscribed' | 'unsubscribed'))}
+        >
+          <option value="all">All statuses</option>
+          <option value="subscribed">Subscribed</option>
+          <option value="unsubscribed">Unsubscribed</option>
         </select>
 
         <div className="sort-control">

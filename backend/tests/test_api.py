@@ -660,6 +660,28 @@ async def test_channels_source_filter(authed_client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_channels_subscription_status_filter(authed_client, db_session):
+    subscribed = Channel(
+        youtube_channel_id="UCstatussub", title="Subscribed Chan", source="subscription", subscription_status="subscribed"
+    )
+    unsubscribed = Channel(
+        youtube_channel_id="UCstatusunsub",
+        title="Unsubscribed Chan",
+        source="subscription",
+        subscription_status="unsubscribed",
+        unsubscribed_at=datetime.utcnow(),
+    )
+    db_session.add_all([subscribed, unsubscribed])
+    await db_session.commit()
+
+    subscribed_only = await authed_client.get("/api/channels", params={"status": "subscribed"})
+    assert {c["title"] for c in subscribed_only.json()} == {"Subscribed Chan"}
+
+    unsubscribed_only = await authed_client.get("/api/channels", params={"status": "unsubscribed"})
+    assert {c["title"] for c in unsubscribed_only.json()} == {"Unsubscribed Chan"}
+
+
+@pytest.mark.asyncio
 async def test_channels_search_by_title_is_case_insensitive_substring(authed_client, db_session):
     db_session.add_all(
         [

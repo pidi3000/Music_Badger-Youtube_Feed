@@ -60,6 +60,11 @@ export default function ChannelRow({ channel, allTags, onDelete, onUpdate, onAck
             {channel.handle && <p className="handle">@{channel.handle}</p>}
           </div>
           <span className="source-badge">{channel.source}</span>
+          {channel.subscription_status === 'unsubscribed' && (
+            <span className="unsubscribed-badge" title={channel.unsubscribed_at ? `Unsubscribed ${formatDate(channel.unsubscribed_at)}` : undefined}>
+              Unsubscribed
+            </span>
+          )}
           <div
             className="status-dot"
             style={{ backgroundColor: BACKFILL_STATUS_COLORS[channel.backfill_status] }}
