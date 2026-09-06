@@ -8,7 +8,7 @@ like `subscriptions.list`) — never both.
 import asyncio
 import logging
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 
 from datetime import datetime, timedelta
 
@@ -43,13 +43,6 @@ class PlaylistItem:
     title: str
     published_at: datetime
     thumbnail_url: str | None
-    # "video" | "short" | "live" — filled in by list_uploads via a batched
-    # videos.list lookup; defaults to "video" if that lookup is skipped or
-    # doesn't cover this id (e.g. a deleted/private video).
-    video_type: str = "video"
-    # True only when video_type was confirmed by the strict-mode redirect
-    # check, not just guessed from duration — see VideoClassification.
-    video_type_verified: bool = False
 
 
 @dataclass(frozen=True)
@@ -127,8 +120,12 @@ _ISO8601_DURATION_RE = re.compile(
     r"^P(?:\d+D)?T?(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?$"
 )
 
-# YouTube's original Shorts length limit — the default (quota-only) heuristic.
-_SHORT_MAX_SECONDS = 60
+# Below this length, the duration-only heuristic is trusted outright — the
+# overwhelming majority of uploads this short are Shorts, so the extra
+# strict-mode redirect check (one more HTTP request per video) isn't worth
+# making for them. Only videos longer than this (up to
+# _SHORTS_CANDIDATE_MAX_SECONDS) are genuinely ambiguous enough to check.
+_SHORT_MAX_SECONDS = 70
 
 # YouTube's current Shorts length cap (raised from 60s in 2024). Only a
 # video at or under this length can possibly be a Short at all, so this is
@@ -179,6 +176,10 @@ async def _is_actual_short(
     error or unexpected response returns None so the caller falls back to
     the duration heuristic instead of guessing.
 
+    Uses HEAD rather than GET: only the status code and (on a redirect) the
+    Location header matter here, and a genuine Short's response is a full
+    HTML page that HEAD lets us skip downloading entirely.
+
     `duration_seconds` (the video's own duration, from the videos.list
     response that made this a candidate) is only used for the log line
     below — it's not needed for the check itself, but seeing it next to
@@ -188,16 +189,16 @@ async def _is_actual_short(
     url = f"https://www.youtube.com/shorts/{video_id}"
     duration_note = f", duration: {duration_seconds}s" if duration_seconds is not None else ""
     try:
-        response = await client.get(
+        response = await client.head(
             url,
             follow_redirects=False,
             timeout=10,
             headers=_SHORTS_CHECK_HEADERS,
         )
     except httpx.HTTPError as exc:
-        logger.info("strict Shorts check GET %s -> error: %s%s", url, exc, duration_note)
+        logger.info("strict Shorts check HEAD %s -> error: %s%s", url, exc, duration_note)
         return None
-    logger.info("strict Shorts check GET %s -> %s%s", url, response.status_code, duration_note)
+    logger.info("strict Shorts check HEAD %s -> %s%s", url, response.status_code, duration_note)
     if response.status_code == 200:
         return True
     if response.status_code in (301, 302, 303, 307, 308):
@@ -230,6 +231,14 @@ class VideoClassification:
     # and gave a conclusive answer — never for the duration heuristic, live
     # videos, or an inconclusive check.
     verified: bool = False
+    # Video/Short length, or an ended livestream's actual runtime. 0 for a
+    # still-live/upcoming broadcast (no final duration yet) or when missing
+    # from the API response.
+    duration_seconds: int = 0
+    # Only set when video_type == "live": "upcoming" | "live" | "ended".
+    live_status: str | None = None
+    # Only set when live_status == "upcoming".
+    scheduled_start_at: datetime | None = None
 
 
 # How many strict-mode redirect checks run at once per classify_video_types
@@ -290,13 +299,17 @@ async def classify_video_types(
     single quota unit, regardless of how many parts are requested.
     playlistItems (and RSS) alone don't expose duration or live status.
 
-    When `strict_shorts` is on, any video that's short enough to *possibly*
-    be a Short (<=180s) also gets the extra `_is_actual_short` check —
-    costs no API quota, but one extra HTTP request per such video, which is
-    why it's opt-in and duration-gated rather than applied to everything.
-    Those checks run concurrently (bounded) rather than one at a time, and
-    stop altogether for a while if too many in a row come back inconclusive
-    — see `_SHORTS_CHECK_CONCURRENCY` and `_ShortsCheckBreaker` above."""
+    When `strict_shorts` is on, any video long enough to be ambiguous
+    (more than `_SHORT_MAX_SECONDS` but still at most
+    `_SHORTS_CANDIDATE_MAX_SECONDS`) also gets the extra `_is_actual_short`
+    check — costs no API quota, but one extra HTTP request per such video.
+    A video at or under `_SHORT_MAX_SECONDS` skips the check entirely and
+    trusts the duration heuristic outright: the overwhelming majority of
+    uploads that short really are Shorts, so the extra request isn't worth
+    making for them. Those checks that do run happen concurrently
+    (bounded) rather than one at a time, and stop altogether for a while if
+    too many in a row come back inconclusive — see
+    `_SHORTS_CHECK_CONCURRENCY` and `_ShortsCheckBreaker` above."""
 
     if not video_ids:
         return {}
@@ -316,14 +329,38 @@ async def classify_video_types(
         if not video_id:
             continue
         snippet = item.get("snippet", {})
-        if snippet.get("liveBroadcastContent") in ("live", "upcoming") or "liveStreamingDetails" in item:
-            classifications[video_id] = VideoClassification("live")
+        broadcast_content = snippet.get("liveBroadcastContent")
+        if broadcast_content in ("live", "upcoming") or "liveStreamingDetails" in item:
+            live_details = item.get("liveStreamingDetails") or {}
+            if broadcast_content == "upcoming":
+                live_status = "upcoming"
+            elif broadcast_content == "live":
+                live_status = "live"
+            else:
+                # liveBroadcastContent is back to "none" but liveStreamingDetails
+                # is still present — the broadcast already ended.
+                live_status = "ended"
+            duration = item.get("contentDetails", {}).get("duration")
+            seconds = _parse_duration_seconds(duration) if duration else 0
+            scheduled_start_at = (
+                _parse_iso(live_details["scheduledStartTime"]) if live_details.get("scheduledStartTime") else None
+            )
+            classifications[video_id] = VideoClassification(
+                "live", duration_seconds=seconds, live_status=live_status, scheduled_start_at=scheduled_start_at
+            )
             continue
         duration = item.get("contentDetails", {}).get("duration")
         seconds = _parse_duration_seconds(duration) if duration else 0
-        duration_based = VideoClassification("short" if 0 < seconds <= _SHORT_MAX_SECONDS else "video")
+        duration_based = VideoClassification(
+            "short" if 0 < seconds <= _SHORT_MAX_SECONDS else "video", duration_seconds=seconds
+        )
 
-        if strict_shorts and 0 < seconds <= _SHORTS_CANDIDATE_MAX_SECONDS and not shorts_check_breaker.is_open():
+        is_candidate = (
+            strict_shorts
+            and _SHORT_MAX_SECONDS < seconds <= _SHORTS_CANDIDATE_MAX_SECONDS
+            and not shorts_check_breaker.is_open()
+        )
+        if is_candidate:
             candidates[video_id] = duration_based
             candidate_seconds[video_id] = seconds
         else:
@@ -340,7 +377,11 @@ async def classify_video_types(
         for video_id, is_short in results:
             shorts_check_breaker.record(is_short)
             if is_short is not None:
-                classifications[video_id] = VideoClassification("short" if is_short else "video", verified=True)
+                classifications[video_id] = VideoClassification(
+                    "short" if is_short else "video",
+                    verified=True,
+                    duration_seconds=candidate_seconds[video_id],
+                )
             else:
                 classifications[video_id] = candidates[video_id]
 
@@ -402,8 +443,16 @@ async def list_uploads(
     uploads_playlist_id: str,
     page_token: str | None = None,
     max_results: int = 50,
-    strict_shorts: bool = False,
 ) -> Page:
+    """Fetches one page of a channel's uploads playlist — 1 quota unit for
+    up to 50 items, and deliberately classification-free. Video/Short/Live
+    classification happens later, after dedup against already-cached
+    uploads, in app.services.classification_service — see
+    app.services.upload_store.upsert_uploads and app.models.
+    ClassificationQueue for why: classifying every item in a page (this
+    used to include the strict-mode redirect check) before knowing which
+    were actually new wasted that work on uploads already in the DB."""
+
     params = {"part": "snippet,contentDetails", "playlistId": uploads_playlist_id, "maxResults": max_results}
     if page_token:
         params["pageToken"] = page_token
@@ -420,27 +469,6 @@ async def list_uploads(
         )
         for item in data.get("items", [])
     ]
-
-    # Best-effort: a failure classifying types must not lose the uploads
-    # themselves. A genuine quota exhaustion (YoutubeQuotaExceeded) is left
-    # to propagate as usual so key rotation still reacts to it.
-    try:
-        classifications = await classify_video_types(
-            client, api_key, [item.video_id for item in items], strict_shorts=strict_shorts
-        )
-    except YoutubeApiError:
-        classifications = {}
-    if classifications:
-        updated_items = []
-        for item in items:
-            classification = classifications.get(item.video_id)
-            if classification is None:
-                updated_items.append(item)
-            else:
-                updated_items.append(
-                    replace(item, video_type=classification.video_type, video_type_verified=classification.verified)
-                )
-        items = updated_items
 
     return Page(items=items, next_page_token=data.get("nextPageToken"))
 

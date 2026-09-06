@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AppSettings, BackfillTask, Channel
 from app.services import key_pool, youtube_client
-from app.services.settings_service import get_or_create_settings
 from app.services.upload_store import upsert_uploads
 
 logger = logging.getLogger(__name__)
@@ -62,7 +61,6 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
         await session.commit()
         return
 
-    settings = await get_or_create_settings(session)
     playlist_id = youtube_client.uploads_playlist_id_for_channel(channel.youtube_channel_id)
     target_after_dt = datetime.combine(task.target_after, datetime.min.time())
 
@@ -71,10 +69,7 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
     task.attempts += 1
     # Commits (not just flushes) this transition before the loop's first
     # network call — a flush leaves the write uncommitted, holding
-    # SQLite's write lock for as long as that call takes. With strict
-    # Shorts detection on, the first page alone can take tens of seconds
-    # (up to 8 concurrent redirect checks per candidate video), which was
-    # blocking every other write in the app for that whole stretch.
+    # SQLite's write lock for as long as that call takes.
     await session.commit()
 
     try:
@@ -115,7 +110,6 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
                     playlist_id,
                     page_token=_cursor,
                     max_results=_max_results,
-                    strict_shorts=settings.strict_shorts_detection,
                 )
 
             page = await key_pool.call_with_key_rotation(session, _call)

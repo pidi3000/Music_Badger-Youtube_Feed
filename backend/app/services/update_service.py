@@ -92,10 +92,7 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
     task.attempts += 1
     # Commits (not just flushes) this transition before the loop's first
     # network call — a flush leaves the write uncommitted, holding
-    # SQLite's write lock for as long as that call takes. With strict
-    # Shorts detection on, the first page alone can take tens of seconds
-    # (up to 8 concurrent redirect checks per candidate video), which was
-    # blocking every other write in the app for that whole stretch.
+    # SQLite's write lock for as long as that call takes.
     await session.commit()
 
     try:
@@ -122,7 +119,6 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
                     api_key,
                     playlist_id,
                     page_token=_cursor,
-                    strict_shorts=settings.strict_shorts_detection,
                 )
 
             try:
@@ -208,9 +204,7 @@ async def fetch_quick_sync(
     playlist_id = youtube_client.uploads_playlist_id_for_channel(youtube_channel_id)
 
     async def _call(api_key: str) -> youtube_client.Page:
-        return await youtube_client.list_uploads(
-            http_client, api_key, playlist_id, strict_shorts=settings.strict_shorts_detection
-        )
+        return await youtube_client.list_uploads(http_client, api_key, playlist_id)
 
     try:
         page = await key_pool.call_with_key_rotation(session, _call)

@@ -146,10 +146,16 @@ class Upload(Base):
     # "api" | "rss" — how this row's data was sourced (transparency, §4)
     fetched_via: Mapped[str] = mapped_column(String(8))
 
-    # "video" | "short" | "live" — best-effort classification (duration +
-    # live-broadcast status via the Data API; RSS-sourced uploads can't be
-    # classified without an extra API call, so they default to "video").
-    video_type: Mapped[str] = mapped_column(String(8), default="video")
+    # "video" | "short" | "live" | "unknown" — best-effort classification
+    # (duration + live-broadcast status via the Data API). "unknown" is the
+    # default for every newly-inserted row: classification is never done
+    # inline with the fetch that discovers an upload (that used to waste a
+    # videos.list call — and, with strict Shorts detection on, the extra
+    # per-video redirect check — on uploads that turned out to already be
+    # cached). Instead app.services.upload_store queues new uploads in
+    # ClassificationQueue, and app.services.classification_service works
+    # through that queue asynchronously, newest published_at first.
+    video_type: Mapped[str] = mapped_column(String(8), default="unknown")
 
     # True only when video_type was confirmed by the strict-mode
     # youtube.com/shorts/{id} redirect check (AppSettings.strict_shorts_detection),
@@ -157,9 +163,57 @@ class Upload(Base):
     # live videos, and anything fetched before strict mode was enabled.
     video_type_verified: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Video/Short length, or an ended livestream's actual runtime, in
+    # seconds. Null until classified, and for a still-live/upcoming
+    # broadcast (no final duration yet).
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Only meaningful when video_type == "live": "upcoming" | "live" |
+    # "ended". Null for every other video_type, and for a "live" upload not
+    # yet (re)classified since this column was introduced.
+    live_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # Only meaningful when live_status == "upcoming" — the scheduled start
+    # time the Data API reports for a premiere/scheduled stream.
+    scheduled_start_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     channel: Mapped["Channel"] = relationship(back_populates="uploads")
+
+
+class ClassificationQueue(Base):
+    """One row per Upload still awaiting (or due for a recheck of) video
+    type classification — see app.services.classification_service. A new
+    upload is queued here by app.services.upload_store *after* dedup
+    against already-cached uploads, so classification (including the
+    costly strict-mode Shorts redirect check) is only ever spent on
+    genuinely new uploads, never repeated for ones already in the DB.
+
+    A "live"/"upcoming" upload's row isn't deleted once classified —
+    `next_check_at` is set instead, so the worker re-checks it later (has
+    the stream started? ended?) until it settles into "ended", at which
+    point the row is finally deleted.
+    """
+
+    __tablename__ = "classification_queue"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    upload_id: Mapped[int] = mapped_column(ForeignKey("uploads.id", ondelete="CASCADE"), unique=True, index=True)
+
+    # Denormalized from Upload.published_at so the worker can pull the
+    # newest uploads first (ORDER BY published_at DESC) without a join.
+    published_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+    # NULL = eligible for classification right now. Set to a future time
+    # after classifying a still-live/upcoming broadcast, so it isn't
+    # re-checked on every single worker tick.
+    next_check_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    upload: Mapped["Upload"] = relationship()
 
 
 class ApiKey(Base):

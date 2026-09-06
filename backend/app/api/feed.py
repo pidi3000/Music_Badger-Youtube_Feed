@@ -95,6 +95,9 @@ async def get_feed(
             fetched_via=u.fetched_via,
             video_type=u.video_type,
             video_type_verified=u.video_type_verified,
+            duration_seconds=u.duration_seconds,
+            live_status=u.live_status,
+            scheduled_start_at=u.scheduled_start_at,
         )
         for u in uploads
     ]

@@ -114,7 +114,8 @@ class ChannelUpdate(BaseModel):
 
 
 # -------------------------------------------------------------- upload ----
-VideoType = Literal["video", "short", "live"]
+VideoType = Literal["video", "short", "live", "unknown"]
+LiveStatus = Literal["upcoming", "live", "ended"]
 
 
 class ChannelRef(BaseModel):
@@ -135,6 +136,9 @@ class UploadOut(BaseModel):
     fetched_via: FetchMethod
     video_type: VideoType
     video_type_verified: bool
+    duration_seconds: int | None
+    live_status: LiveStatus | None
+    scheduled_start_at: datetime | None
 
 
 class FeedPage(BaseModel):

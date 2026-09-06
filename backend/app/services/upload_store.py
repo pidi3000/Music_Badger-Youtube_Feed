@@ -9,7 +9,7 @@ from typing import Literal, Protocol, runtime_checkable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Channel, Upload
+from app.models import Channel, ClassificationQueue, Upload
 
 
 @runtime_checkable
@@ -18,8 +18,6 @@ class UploadEntryLike(Protocol):
     title: str
     thumbnail_url: str | None
     published_at: object  # datetime, kept loose to avoid importing datetime just for typing
-    video_type: str
-    video_type_verified: bool
 
 
 async def upsert_uploads(
@@ -28,9 +26,16 @@ async def upsert_uploads(
     entries: list,
     fetched_via: Literal["api", "rss"],
 ) -> int:
-    """Inserts any entries not already cached for this channel. Returns the
+    """Inserts any entries not already cached for this channel, as
+    unclassified ("unknown") rows queued for classification. Returns the
     count of newly-inserted rows (already-cached entries are skipped, never
-    re-fetched or overwritten — nothing is ever pruned, see §7)."""
+    re-fetched or overwritten — nothing is ever pruned, see §7).
+
+    Classification (video/short/live, including the strict-mode Shorts
+    check) deliberately does not happen here, or anywhere before this dedup
+    check runs — see app.services.classification_service's module
+    docstring for why doing it any earlier wastes work on uploads that turn
+    out to already be cached."""
 
     if not entries:
         return 0
@@ -47,18 +52,17 @@ async def upsert_uploads(
     for entry in entries:
         if entry.video_id in existing_ids:
             continue
-        session.add(
-            Upload(
-                channel_id=channel.id,
-                youtube_video_id=entry.video_id,
-                title=entry.title,
-                published_at=entry.published_at,
-                thumbnail_url=entry.thumbnail_url,
-                fetched_via=fetched_via,
-                video_type=getattr(entry, "video_type", "video"),
-                video_type_verified=getattr(entry, "video_type_verified", False),
-            )
+        upload = Upload(
+            channel_id=channel.id,
+            youtube_video_id=entry.video_id,
+            title=entry.title,
+            published_at=entry.published_at,
+            thumbnail_url=entry.thumbnail_url,
+            fetched_via=fetched_via,
+            video_type="unknown",
         )
+        session.add(upload)
+        session.add(ClassificationQueue(upload=upload, published_at=entry.published_at))
         existing_ids.add(entry.video_id)
         new_count += 1
 

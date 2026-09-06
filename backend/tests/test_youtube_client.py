@@ -128,20 +128,6 @@ def _mock_client(response_json: dict) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-def _mock_multi_client(by_path_substring: dict[str, dict]) -> httpx.AsyncClient:
-    """Routes to a different canned response depending on which YouTube API
-    endpoint the request hit — needed for list_uploads, which now makes a
-    second (videos.list) call to classify each upload's type."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        for substring, response_json in by_path_substring.items():
-            if substring in str(request.url):
-                return httpx.Response(200, json=response_json, request=request)
-        return httpx.Response(200, json={"items": []}, request=request)
-
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
-
-
 @pytest.mark.asyncio
 async def test_get_channel_extracts_thumbnail_and_uploads_playlist():
     async with _mock_client(CHANNEL_RESPONSE) as client:
@@ -301,7 +287,8 @@ async def testclassify_video_types_live_via_broadcast_content():
 @pytest.mark.asyncio
 async def testclassify_video_types_live_via_ended_livestream_details():
     """An ended livestream reports liveBroadcastContent="none" again, but
-    still carries liveStreamingDetails — must still classify as live."""
+    still carries liveStreamingDetails — must still classify as live, with
+    live_status "ended" and its actual runtime as duration_seconds."""
     response = {
         "items": [
             {
@@ -316,6 +303,46 @@ async def testclassify_video_types_live_via_ended_livestream_details():
         classifications = await youtube_client.classify_video_types(client, "fake-key", ["vid-ended-live"])
 
     assert _types_only(classifications) == {"vid-ended-live": "live"}
+    assert classifications["vid-ended-live"].live_status == "ended"
+    assert classifications["vid-ended-live"].duration_seconds == 5400
+
+
+@pytest.mark.asyncio
+async def testclassify_video_types_live_status_for_currently_live_broadcast():
+    response = {
+        "items": [
+            {
+                "id": "vid-live",
+                "snippet": {"liveBroadcastContent": "live"},
+                "contentDetails": {"duration": "PT0S"},
+                "liveStreamingDetails": {"actualStartTime": "2024-01-01T00:00:00Z"},
+            }
+        ]
+    }
+    async with _mock_client(response) as client:
+        classifications = await youtube_client.classify_video_types(client, "fake-key", ["vid-live"])
+
+    assert classifications["vid-live"].video_type == "live"
+    assert classifications["vid-live"].live_status == "live"
+
+
+@pytest.mark.asyncio
+async def testclassify_video_types_upcoming_broadcast_has_scheduled_start_at():
+    response = {
+        "items": [
+            {
+                "id": "vid-upcoming",
+                "snippet": {"liveBroadcastContent": "upcoming"},
+                "liveStreamingDetails": {"scheduledStartTime": "2026-09-10T18:00:00Z"},
+            }
+        ]
+    }
+    async with _mock_client(response) as client:
+        classifications = await youtube_client.classify_video_types(client, "fake-key", ["vid-upcoming"])
+
+    assert classifications["vid-upcoming"].video_type == "live"
+    assert classifications["vid-upcoming"].live_status == "upcoming"
+    assert classifications["vid-upcoming"].scheduled_start_at == datetime(2026, 9, 10, 18, 0, 0)
 
 
 @pytest.mark.asyncio
@@ -333,6 +360,7 @@ async def testclassify_video_types_normal_length_is_video():
         classifications = await youtube_client.classify_video_types(client, "fake-key", ["vid-normal"])
 
     assert _types_only(classifications) == {"vid-normal": "video"}
+    assert classifications["vid-normal"].duration_seconds == 605
 
 
 @pytest.mark.asyncio
@@ -341,27 +369,6 @@ async def testclassify_video_types_returns_empty_for_no_ids():
         classifications = await youtube_client.classify_video_types(client, "fake-key", [])
 
     assert classifications == {}
-
-
-@pytest.mark.asyncio
-async def test_list_uploads_fills_in_video_type_from_classification():
-    async with _mock_multi_client(
-        {
-            "playlistItems": PLAYLIST_ITEMS_RESPONSE,
-            "videos": {
-                "items": [
-                    {
-                        "id": "abc123",
-                        "snippet": {"liveBroadcastContent": "none"},
-                        "contentDetails": {"duration": "PT45S"},
-                    }
-                ]
-            },
-        }
-    ) as client:
-        page = await youtube_client.list_uploads(client, "fake-key", "UU_x5XG1OV2P6uZZ5FSM9Ttw")
-
-    assert page.items[0].video_type == "short"
 
 
 def _mock_client_with_shorts_redirect(videos_response: dict, shorts_status_by_id: dict):
@@ -485,14 +492,15 @@ async def testclassify_video_types_strict_off_never_makes_shorts_request():
 
 
 @pytest.mark.asyncio
-async def testclassify_video_types_strict_on_overrides_duration_heuristic():
-    """A 45s video that is NOT actually a Short (e.g. a widescreen clip)
-    must be corrected to "video" by the redirect check when strict mode
-    is on, even though duration alone would call it a short — and the
-    correction must be recorded as verified."""
+async def testclassify_video_types_strict_on_confirms_duration_heuristic_and_still_records_verified():
+    """A 90s video (in the candidate window, duration heuristic already
+    says "video" since it's over _SHORT_MAX_SECONDS) that the redirect
+    check also says isn't a Short must be recorded as verified=True even
+    though the type itself didn't change — "verified" means the check ran
+    and confirmed it, not just that the result was a surprise."""
     response = {
         "items": [
-            {"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}
+            {"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT1M30S"}}
         ]
     }
     client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 302})
@@ -510,7 +518,9 @@ async def test_is_actual_short_logs_the_video_duration_next_to_the_request(caplo
     and its status — makes it easy to eyeball, from the server console,
     which checks are landing on genuinely short-enough videos."""
     response = {
-        "items": [{"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}]
+        "items": [
+            {"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT1M30S"}}
+        ]
     }
     client, _ = _mock_client_with_shorts_redirect(response, {"vid1": 200})
     async with client:
@@ -520,7 +530,7 @@ async def test_is_actual_short_logs_the_video_duration_next_to_the_request(caplo
     matching = [r.message for r in caplog.records if r.name == "app.services.youtube_client"]
     assert len(matching) == 1
     assert "200" in matching[0]
-    assert "duration: 45s" in matching[0]
+    assert "duration: 90s" in matching[0]
 
 
 @pytest.mark.asyncio
@@ -558,17 +568,37 @@ async def testclassify_video_types_strict_on_skips_request_beyond_candidate_wind
 
 
 @pytest.mark.asyncio
+async def testclassify_video_types_strict_on_skips_request_at_or_below_short_max():
+    """A video at or under _SHORT_MAX_SECONDS is short enough that the
+    duration heuristic alone is trusted — the overwhelming majority of
+    uploads that short really are Shorts, so the extra request isn't
+    worth making even with strict mode on."""
+    response = {
+        "items": [
+            {"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT1M10S"}}
+        ]
+    }
+    client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 200})
+    async with client:
+        classifications = await youtube_client.classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+
+    assert _types_only(classifications) == {"vid1": "short"}  # duration heuristic, unverified
+    assert classifications["vid1"].verified is False
+    assert call_log == []
+
+
+@pytest.mark.asyncio
 async def testclassify_video_types_strict_on_falls_back_when_check_is_inconclusive():
     response = {
         "items": [
-            {"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}
+            {"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT1M30S"}}
         ]
     }
     client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 500})
     async with client:
         classifications = await youtube_client.classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
 
-    assert _types_only(classifications) == {"vid1": "short"}  # duration heuristic fallback
+    assert _types_only(classifications) == {"vid1": "video"}  # duration heuristic fallback (90s > _SHORT_MAX_SECONDS)
     assert classifications["vid1"].verified is False  # inconclusive check, not confirmed
     assert len(call_log) == 1
 
@@ -597,7 +627,7 @@ async def testclassify_video_types_strict_on_checks_multiple_candidates_concurre
     time for a page regardless of how many candidates it has)."""
     response = {
         "items": [
-            {"id": f"vid{i}", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}
+            {"id": f"vid{i}", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT1M30S"}}
             for i in range(6)
         ]
     }
@@ -621,7 +651,9 @@ async def testclassify_video_types_breaker_trips_after_consecutive_inconclusive_
     request per candidate — that's what stops one bad patch of channels
     from stalling everything downstream of it."""
     response = {
-        "items": [{"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}]
+        "items": [
+            {"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT1M30S"}}
+        ]
     }
     client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 500})  # always inconclusive
     async with client:
@@ -635,14 +667,16 @@ async def testclassify_video_types_breaker_trips_after_consecutive_inconclusive_
         classifications = await youtube_client.classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
 
     assert len(call_log) == youtube_client.shorts_check_breaker.threshold  # unchanged, no new request
-    assert classifications["vid1"].video_type == "short"  # PT45S duration heuristic
+    assert classifications["vid1"].video_type == "video"  # PT1M30S duration heuristic (90s > _SHORT_MAX_SECONDS)
     assert classifications["vid1"].verified is False
 
 
 @pytest.mark.asyncio
 async def testclassify_video_types_conclusive_result_resets_the_breaker():
     response = {
-        "items": [{"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}]
+        "items": [
+            {"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT1M30S"}}
+        ]
     }
     client, call_log = _mock_client_with_shorts_redirect(response, {"vid1": 500})
     async with client:
@@ -663,43 +697,17 @@ async def testclassify_video_types_conclusive_result_resets_the_breaker():
 
 
 @pytest.mark.asyncio
-async def test_list_uploads_strict_shorts_flag_reaches_the_redirect_check():
-    videos_response = {
-        "items": [
-            {"id": "abc123", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}
-        ]
-    }
-    call_log: list[str] = []
+async def test_is_actual_short_uses_head_not_get():
+    """Only the status code and (on a redirect) the Location header ever
+    matter here — a real Short's response is a full HTML page, so HEAD
+    lets the check skip downloading it entirely."""
+    captured_methods: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        url = str(request.url)
-        if "youtube.com/shorts/" in url:
-            call_log.append(url)
-            return httpx.Response(302, headers={"location": "https://www.youtube.com/watch?v=abc123"}, request=request)
-        if "playlistItems" in url:
-            return httpx.Response(200, json=PLAYLIST_ITEMS_RESPONSE, request=request)
-        return httpx.Response(200, json=videos_response, request=request)
+        captured_methods.append(request.method)
+        return httpx.Response(200, request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        page = await youtube_client.list_uploads(
-            client, "fake-key", "UU_x5XG1OV2P6uZZ5FSM9Ttw", strict_shorts=True
-        )
+        await youtube_client._is_actual_short(client, "vid1")
 
-    # The redirect check said "not a Short" — must override the duration
-    # heuristic (45s would otherwise say "short") and record it as verified.
-    assert page.items[0].video_type == "video"
-    assert page.items[0].video_type_verified is True
-    assert len(call_log) == 1
-
-
-@pytest.mark.asyncio
-async def test_list_uploads_defaults_video_type_when_classification_lookup_omits_the_id():
-    """A video id missing from the videos.list response (e.g. deleted)
-    must not crash the upload fetch — it just defaults to "video", unverified."""
-    async with _mock_multi_client(
-        {"playlistItems": PLAYLIST_ITEMS_RESPONSE, "videos": {"items": []}}
-    ) as client:
-        page = await youtube_client.list_uploads(client, "fake-key", "UU_x5XG1OV2P6uZZ5FSM9Ttw")
-
-    assert page.items[0].video_type == "video"
-    assert page.items[0].video_type_verified is False
+    assert captured_methods == ["HEAD"]

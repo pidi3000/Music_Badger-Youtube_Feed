@@ -25,32 +25,6 @@ async def make_channel(db_session, youtube_channel_id: str = "UCabc123") -> Chan
 
 
 @pytest.mark.asyncio
-async def test_process_task_passes_persisted_strict_shorts_setting(db_session, monkeypatch):
-    settings = await get_or_create_settings(db_session)
-    settings.strict_shorts_detection = True
-    await db_session.commit()
-
-    channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
-    await db_session.commit()
-
-    task = await update_service.enqueue_update_task(db_session, channel)
-    await db_session.commit()
-
-    captured = {}
-
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
-        captured["strict_shorts"] = strict_shorts
-        return make_page([], next_token=None)
-
-    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
-
-    await update_service.process_task(db_session, http_client=None, task=task)
-
-    assert captured["strict_shorts"] is True
-
-
-@pytest.mark.asyncio
 async def test_stops_paginating_once_a_page_yields_no_new_uploads(db_session, monkeypatch):
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))

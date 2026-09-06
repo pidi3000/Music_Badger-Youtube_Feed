@@ -36,7 +36,11 @@ def make_upload(
 
 
 @pytest.mark.asyncio
-async def test_rescan_only_touches_unverified_uploads_within_the_window(db_session, monkeypatch):
+async def test_rescan_reclassifies_every_upload_within_the_window_including_already_verified(db_session, monkeypatch):
+    """Rescan is an explicit "reload everything" action, not a "only fill
+    in what's missing" one — an already-verified upload within the window
+    (e.g. a livestream whose duration/live-status has since changed) must
+    be reloaded too, not skipped."""
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
 
@@ -58,16 +62,16 @@ async def test_rescan_only_touches_unverified_uploads_within_the_window(db_sessi
 
     result = await reclassify_service.rescan_recent_uploads(db_session, http_client=None)
 
-    assert captured_ids == ["recent-unverified"]  # verified and old uploads excluded
-    assert result.checked == 1
-    assert result.reclassified == 1  # "video" -> "short"
+    assert set(captured_ids) == {"recent-unverified", "recent-verified"}  # old upload still excluded
+    assert result.checked == 2
+    assert result.reclassified == 2  # both were "video" -> "short"
 
     await db_session.refresh(recent_unverified)
     assert recent_unverified.video_type == "short"
     assert recent_unverified.video_type_verified is True
 
     await db_session.refresh(recent_verified)
-    assert recent_verified.video_type == "video"  # untouched, was already verified
+    assert recent_verified.video_type == "short"  # reloaded even though already verified
 
     await db_session.refresh(old_unverified)
     assert old_unverified.video_type == "video"  # untouched, outside the window
@@ -112,6 +116,57 @@ async def test_rescan_marks_verified_even_when_type_is_unchanged(db_session, mon
     await db_session.refresh(upload)
     assert upload.video_type == "video"
     assert upload.video_type_verified is True  # still marked verified so it's not rescanned again
+
+
+@pytest.mark.asyncio
+async def test_rescan_reloads_duration_and_live_status(db_session, monkeypatch):
+    channel = await make_channel(db_session)
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
+    upload = make_upload(channel.id, "vid1", datetime.utcnow() - timedelta(hours=1), video_type="live")
+    db_session.add(upload)
+    await db_session.commit()
+
+    async def fake_classify_video_types(client, api_key, video_ids, strict_shorts=False):
+        return {
+            "vid1": youtube_client.VideoClassification(
+                "live", duration_seconds=5400, live_status="ended", scheduled_start_at=None
+            )
+        }
+
+    monkeypatch.setattr(youtube_client, "classify_video_types", fake_classify_video_types)
+
+    await reclassify_service.rescan_recent_uploads(db_session, http_client=None)
+
+    await db_session.refresh(upload)
+    assert upload.duration_seconds == 5400
+    assert upload.live_status == "ended"
+
+
+@pytest.mark.asyncio
+async def test_rescan_deletes_the_classification_queue_row_once_terminal(db_session, monkeypatch):
+    """A very recently fetched upload can still be sitting in the
+    classification queue (not yet picked up by classification_service) when
+    a manual rescan reaches it first — the queue row must not stick around
+    forever once the rescan already gave it a final answer."""
+    from app.models import ClassificationQueue
+
+    channel = await make_channel(db_session)
+    db_session.add(ApiKey(label="active-1", key_value_encrypted=encrypt("k")))
+    upload = make_upload(channel.id, "vid1", datetime.utcnow() - timedelta(hours=1), video_type="unknown")
+    db_session.add(upload)
+    await db_session.flush()
+    db_session.add(ClassificationQueue(upload_id=upload.id, published_at=upload.published_at))
+    await db_session.commit()
+
+    async def fake_classify_video_types(client, api_key, video_ids, strict_shorts=False):
+        return {"vid1": youtube_client.VideoClassification("video", verified=True)}
+
+    monkeypatch.setattr(youtube_client, "classify_video_types", fake_classify_video_types)
+
+    await reclassify_service.rescan_recent_uploads(db_session, http_client=None)
+
+    remaining = await db_session.execute(select(ClassificationQueue).where(ClassificationQueue.upload_id == upload.id))
+    assert remaining.scalar_one_or_none() is None
 
 
 @pytest.mark.asyncio

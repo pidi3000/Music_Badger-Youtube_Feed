@@ -1,5 +1,7 @@
 import { Upload } from '../api/feed';
 import { youtubeChannelUrl } from '../utils/youtube';
+import { formatDateTime } from '../utils/dates';
+import { formatDuration } from '../utils/duration';
 import ChannelAvatar from './ChannelAvatar';
 import RelativeTime from './RelativeTime';
 import '../styles/upload-card.css';
@@ -8,7 +10,9 @@ interface UploadCardProps {
   upload: Upload;
 }
 
-const VIDEO_TYPE_LABELS: Record<Upload['video_type'], string> = {
+// No entry for "unknown" — not yet classified, so no type badge is shown
+// at all rather than guessing or labeling it "Unknown".
+const VIDEO_TYPE_LABELS: Partial<Record<Upload['video_type'], string>> = {
   video: 'Video',
   short: 'Short',
   live: 'Live',
@@ -25,6 +29,16 @@ export default function UploadCard({ upload }: UploadCardProps) {
     window.open(videoUrl, '_blank');
   };
 
+  const typeLabel = VIDEO_TYPE_LABELS[upload.video_type];
+  const isUpcoming = upload.video_type === 'live' && upload.live_status === 'upcoming';
+  const isActiveLive = upload.video_type === 'live' && upload.live_status === 'live';
+  // A "live" upload only has a real, final duration once its broadcast has
+  // ended — while it's upcoming/live there's nothing to show yet.
+  const hasDuration =
+    upload.duration_seconds != null &&
+    upload.duration_seconds > 0 &&
+    (upload.video_type !== 'live' || upload.live_status === 'ended');
+
   return (
     <div className="upload-card" onClick={handleClick}>
       <div className="upload-thumbnail">
@@ -33,9 +47,15 @@ export default function UploadCard({ upload }: UploadCardProps) {
         ) : (
           <div className="placeholder">No image</div>
         )}
-        <span className={`video-type-badge video-type-${upload.video_type}`}>
-          {VIDEO_TYPE_LABELS[upload.video_type]}
-        </span>
+        {typeLabel && <span className={`video-type-badge video-type-${upload.video_type}`}>{typeLabel}</span>}
+        {isActiveLive && (
+          <span className="corner-badge live-now-badge">
+            <span className="live-dot" />
+            Live
+          </span>
+        )}
+        {isUpcoming && <span className="corner-badge upcoming-badge">Upcoming</span>}
+        {hasDuration && <span className="corner-badge duration-badge">{formatDuration(upload.duration_seconds!)}</span>}
       </div>
       <div className="upload-info">
         <h3>{upload.title}</h3>
@@ -50,7 +70,11 @@ export default function UploadCard({ upload }: UploadCardProps) {
           <span>{upload.channel.title}</span>
         </a>
         <div className="meta">
-          <RelativeTime iso={upload.published_at} className="date" />
+          {isUpcoming && upload.scheduled_start_at ? (
+            <span className="date">Scheduled for {formatDateTime(upload.scheduled_start_at)}</span>
+          ) : (
+            <RelativeTime iso={upload.published_at} className="date" />
+          )}
           {upload.fetched_via === 'rss' && <span className="badge">RSS</span>}
         </div>
       </div>

@@ -1,7 +1,8 @@
 import { useQuery, UseQueryOptions } from '@tanstack/react-query';
 import { apiCall } from './client';
 
-export type VideoType = 'video' | 'short' | 'live';
+export type VideoType = 'video' | 'short' | 'live' | 'unknown';
+export type LiveStatus = 'upcoming' | 'live' | 'ended';
 
 export interface Upload {
   id: number;
@@ -19,6 +20,9 @@ export interface Upload {
   fetched_via: 'api' | 'rss';
   video_type: VideoType;
   video_type_verified: boolean;
+  duration_seconds: number | null;
+  live_status: LiveStatus | null;
+  scheduled_start_at: string | null;
 }
 
 export interface FeedResponse {
