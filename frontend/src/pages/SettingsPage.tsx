@@ -84,7 +84,7 @@ export default function SettingsPage() {
       const result = await rescanShortsMutation.mutateAsync();
       showSuccess(
         result.checked === 0
-          ? 'No unverified uploads from the last 7 days to rescan'
+          ? 'No uploads from the last 7 days to rescan'
           : `Rescanned ${result.checked} upload${result.checked === 1 ? '' : 's'} — ${result.reclassified} reclassified`,
       );
     } catch (err) {
@@ -232,18 +232,17 @@ export default function SettingsPage() {
                 quota, but adds one extra web request per such upload and relies on an unofficial, undocumented
                 YouTube behavior.
               </p>
-              {settings?.strict_shorts_detection && (
-                <div className="rescan-shorts">
-                  <button type="button" onClick={handleRescanShorts} disabled={rescanShortsMutation.isPending}>
-                    {rescanShortsMutation.isPending ? 'Rescanning...' : 'Rescan last 7 days'}
-                  </button>
-                  <p className="setting-hint">
-                    Re-checks uploads from the last 7 days that haven't been verified yet — lets you apply
-                    strict detection to uploads fetched before you turned it on, without waiting for a fresh
-                    sync.
-                  </p>
-                </div>
-              )}
+              <div className="rescan-shorts">
+                <button type="button" onClick={handleRescanShorts} disabled={rescanShortsMutation.isPending}>
+                  {rescanShortsMutation.isPending ? 'Rescanning...' : 'Rescan last 7 days'}
+                </button>
+                <p className="setting-hint">
+                  Fully reloads every upload from the last 7 days — type, duration, and live status — using
+                  strict Shorts detection regardless of whether the toggle above is on. Useful after turning
+                  strict detection on, or to refresh a livestream's status/duration, without waiting for a
+                  fresh sync.
+                </p>
+              </div>
             </div>
             <button type="submit" disabled={updateSettingsMutation.isPending}>
               {updateSettingsMutation.isPending ? 'Saving...' : 'Save Settings'}
