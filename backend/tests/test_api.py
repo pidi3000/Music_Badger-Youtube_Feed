@@ -345,21 +345,20 @@ async def test_settings_get_and_patch(authed_client):
     initial = await authed_client.get("/api/settings")
     assert initial.status_code == 200
     body = initial.json()
-    assert body["update_lookback_days"] == 30
+    assert body["upload_retention_days"] == 365
+    assert body["live_recheck_interval_minutes"] == 5
     assert body["rss_fallback_enabled"] is True
-    assert body["backfill_days"] == 365
-    assert body["backfill_min_count"] == 50
     assert body["strict_shorts_detection"] is False
 
     updated = await authed_client.patch(
-        "/api/settings", json={"update_lookback_days": 14, "rss_fallback_enabled": False, "backfill_min_count": 10}
+        "/api/settings",
+        json={"upload_retention_days": 14, "rss_fallback_enabled": False, "live_recheck_interval_minutes": 10},
     )
     assert updated.status_code == 200
     updated_body = updated.json()
-    assert updated_body["update_lookback_days"] == 14
+    assert updated_body["upload_retention_days"] == 14
     assert updated_body["rss_fallback_enabled"] is False
-    assert updated_body["backfill_min_count"] == 10
-    assert updated_body["backfill_days"] == 365
+    assert updated_body["live_recheck_interval_minutes"] == 10
     assert updated_body["sync_interval_minutes"] == 30
     assert updated_body["backfill_worker_interval_seconds"] == 60
     # untouched by this PATCH, which didn't include it
@@ -852,7 +851,6 @@ async def test_backfill_tasks_list_and_retry(authed_client, db_session, monkeypa
     task = BackfillTask(
         channel_id=channel.id,
         status="failed",
-        target_min_count=1,
         target_after=datetime.utcnow().date(),
         last_error="boom",
     )
@@ -887,7 +885,6 @@ async def test_jobs_unifies_backfill_update_and_import(authed_client, db_session
         BackfillTask(
             channel_id=channel.id,
             status="in_progress",
-            target_min_count=50,
             target_after=now.date(),
             fetched_count=10,
             started_at=now,
@@ -923,8 +920,10 @@ async def test_jobs_unifies_backfill_update_and_import(authed_client, db_session
 
     backfill_job = next(j for j in body if j["kind"] == "backfill")
     assert backfill_job["channel"]["title"] == "Jobs API Chan"
-    assert backfill_job["fetched_count"] == 10
-    assert backfill_job["target_min_count"] == 50
+    assert "10 uploads fetched" in backfill_job["detail"]
+    # target_after == today, so the retention window's already fully
+    # "covered" by construction (see api.jobs._backfill_progress_percent).
+    assert backfill_job["progress_percent"] == 100
     assert backfill_job["backfill_task_id"] is not None
 
     update_job = next(j for j in body if j["kind"] == "update")
@@ -945,7 +944,7 @@ async def test_jobs_kind_filter(authed_client, db_session):
     await db_session.flush()
 
     now = datetime.utcnow()
-    db_session.add(BackfillTask(channel_id=channel.id, status="queued", target_min_count=50, target_after=now.date()))
+    db_session.add(BackfillTask(channel_id=channel.id, status="queued", target_after=now.date()))
     db_session.add(UpdateTask(channel_id=channel.id, status="queued"))
     db_session.add(SyncLog(status="success", started_at=now, finished_at=now))
     await db_session.commit()
@@ -968,10 +967,10 @@ async def test_jobs_state_filter_groups_raw_statuses(authed_client, db_session):
     now = datetime.utcnow()
     db_session.add_all(
         [
-            BackfillTask(channel_id=channel.id, status="queued", target_min_count=50, target_after=now.date()),
-            BackfillTask(channel_id=channel.id, status="in_progress", target_min_count=50, target_after=now.date()),
-            BackfillTask(channel_id=channel.id, status="completed", target_min_count=50, target_after=now.date()),
-            BackfillTask(channel_id=channel.id, status="failed", target_min_count=50, target_after=now.date()),
+            BackfillTask(channel_id=channel.id, status="queued", target_after=now.date()),
+            BackfillTask(channel_id=channel.id, status="in_progress", target_after=now.date()),
+            BackfillTask(channel_id=channel.id, status="completed", target_after=now.date()),
+            BackfillTask(channel_id=channel.id, status="failed", target_after=now.date()),
             UpdateTask(channel_id=channel.id, status="paused_quota"),
             SyncLog(status="running"),
             SyncLog(status="success"),
@@ -1030,7 +1029,7 @@ async def test_stop_job_marks_a_queued_backfill_task_stopped_immediately(authed_
     channel = Channel(youtube_channel_id="UCstop1", title="Stop Chan", source="manual")
     db_session.add(channel)
     await db_session.flush()
-    task = BackfillTask(channel_id=channel.id, status="queued", target_min_count=50, target_after=datetime.utcnow().date())
+    task = BackfillTask(channel_id=channel.id, status="queued", target_after=datetime.utcnow().date())
     db_session.add(task)
     await db_session.commit()
 
@@ -1045,7 +1044,7 @@ async def test_stop_job_marks_a_paused_backfill_task_stopped_immediately(authed_
     db_session.add(channel)
     await db_session.flush()
     task = BackfillTask(
-        channel_id=channel.id, status="paused_quota", target_min_count=50, target_after=datetime.utcnow().date()
+        channel_id=channel.id, status="paused_quota", target_after=datetime.utcnow().date()
     )
     db_session.add(task)
     await db_session.commit()
@@ -1066,7 +1065,7 @@ async def test_stop_job_only_signals_an_in_progress_backfill_task(authed_client,
     db_session.add(channel)
     await db_session.flush()
     task = BackfillTask(
-        channel_id=channel.id, status="in_progress", target_min_count=50, target_after=datetime.utcnow().date()
+        channel_id=channel.id, status="in_progress", target_after=datetime.utcnow().date()
     )
     db_session.add(task)
     await db_session.commit()
@@ -1084,7 +1083,6 @@ async def test_stop_job_rejects_an_already_finished_backfill_task(authed_client,
     task = BackfillTask(
         channel_id=channel.id,
         status="completed",
-        target_min_count=50,
         target_after=datetime.utcnow().date(),
         completed_at=datetime.utcnow(),
     )
@@ -1137,18 +1135,17 @@ async def test_stop_all_jobs_stops_every_stoppable_job_across_all_kinds(authed_c
     await db_session.flush()
 
     queued_backfill = BackfillTask(
-        channel_id=channel.id, status="queued", target_min_count=50, target_after=datetime.utcnow().date()
+        channel_id=channel.id, status="queued", target_after=datetime.utcnow().date()
     )
     running_backfill = BackfillTask(
-        channel_id=channel.id, status="in_progress", target_min_count=50, target_after=datetime.utcnow().date()
+        channel_id=channel.id, status="in_progress", target_after=datetime.utcnow().date()
     )
     paused_backfill = BackfillTask(
-        channel_id=channel.id, status="paused_quota", target_min_count=50, target_after=datetime.utcnow().date()
+        channel_id=channel.id, status="paused_quota", target_after=datetime.utcnow().date()
     )
     done_backfill = BackfillTask(
         channel_id=channel.id,
         status="completed",
-        target_min_count=50,
         target_after=datetime.utcnow().date(),
         completed_at=datetime.utcnow(),
     )

@@ -6,7 +6,7 @@
 // it's parsed as the UTC instant it actually is; everything downstream
 // (Date's local getters, toLocaleTimeString) then converts it to the
 // viewer's own system timezone.
-function parseUtc(isoString: string): Date {
+export function parseUtc(isoString: string): Date {
   const hasTimezone = /[Zz]|[+-]\d{2}:?\d{2}$/.test(isoString);
   return new Date(hasTimezone ? isoString : `${isoString}Z`);
 }

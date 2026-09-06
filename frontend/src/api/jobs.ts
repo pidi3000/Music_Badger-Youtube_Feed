@@ -19,6 +19,7 @@ export interface Job {
   finished_at: string | null;
   fetched_count: number | null;
   target_min_count: number | null;
+  progress_percent: number | null;
   backfill_task_id: number | null;
 }
 

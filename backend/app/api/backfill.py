@@ -17,7 +17,6 @@ def _to_out(task: BackfillTask) -> BackfillTaskOut:
         channel=channel_to_ref(task.channel),
         status=task.status,
         fetched_count=task.fetched_count,
-        target_min_count=task.target_min_count,
         target_after=task.target_after,
         oldest_fetched_published_at=task.oldest_fetched_published_at,
         last_error=task.last_error,

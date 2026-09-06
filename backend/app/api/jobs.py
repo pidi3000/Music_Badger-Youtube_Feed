@@ -50,10 +50,29 @@ def _next_status_for_stop(current_status: str) -> str:
     return "stopped" if current_status in ("queued", "paused_quota") else "stopping"
 
 
+def _backfill_progress_percent(task: BackfillTask) -> int | None:
+    """How much of the retention window (days between when the task was
+    created and its target_after cutoff) has been covered so far, based on
+    how far back oldest_fetched_published_at has gotten — the day-based
+    replacement for the old count-based (fetched / target_min_count)
+    progress bar."""
+
+    total_days = (task.created_at.date() - task.target_after).days
+    if total_days <= 0:
+        return 100
+    if task.oldest_fetched_published_at is None:
+        return 0
+    covered_days = (task.created_at.date() - task.oldest_fetched_published_at.date()).days
+    return max(0, min(100, round(covered_days / total_days * 100)))
+
+
 def _backfill_to_job(task: BackfillTask) -> JobOut:
     detail = None
-    if task.status not in ("failed",):
-        detail = f"{task.fetched_count} / {task.target_min_count} uploads"
+    progress_percent = None
+    if task.status != "failed":
+        upload_word = "upload" if task.fetched_count == 1 else "uploads"
+        detail = f"{task.fetched_count} {upload_word} fetched, back to {task.target_after.isoformat()}"
+        progress_percent = _backfill_progress_percent(task)
     return JobOut(
         id=f"backfill-{task.id}",
         kind="backfill",
@@ -63,8 +82,7 @@ def _backfill_to_job(task: BackfillTask) -> JobOut:
         error=task.last_error,
         started_at=task.started_at or task.created_at,
         finished_at=task.completed_at,
-        fetched_count=task.fetched_count,
-        target_min_count=task.target_min_count,
+        progress_percent=progress_percent,
         backfill_task_id=task.id,
     )
 

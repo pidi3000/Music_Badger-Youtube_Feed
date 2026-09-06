@@ -3,14 +3,16 @@
 Each channel gets one BackfillTask on creation. The worker
 (app.services.job_worker) calls `process_task` on a tick, but only once the
 UpdateTask queue is empty — see job_worker.run_worker_tick. A task pages
-through the API via the shared key pool until either the retention target
-is met or the channel's whole history is exhausted. If every key is
-quota-exhausted mid-task, the task pauses (`paused_quota`) with its cursor
-intact and is retried automatically on a later tick — never restarted from
-scratch, never silently dropped. Unlike incremental updates
-(app.services.update_service), backfill has no RSS fallback: RSS can't
-satisfy a count/date target on its own, since it only ever returns the ~15
-most recent items.
+through the API via the shared key pool until it's gone back
+AppSettings.upload_retention_days or the channel's whole history is
+exhausted — purely a date cutoff, not a count target: nothing published
+before that cutoff is ever stored, regardless of how few (or many) uploads
+that leaves. If every key is quota-exhausted mid-task, the task pauses
+(`paused_quota`) with its cursor intact and is retried automatically on a
+later tick — never restarted from scratch, never silently dropped. Unlike
+incremental updates (app.services.update_service), backfill has no RSS
+fallback: RSS can't satisfy a date target on its own, since it only ever
+returns the ~15 most recent items.
 """
 
 import logging
@@ -28,14 +30,13 @@ logger = logging.getLogger(__name__)
 
 
 def _target_after(settings: AppSettings) -> date:
-    return (datetime.utcnow() - timedelta(days=settings.backfill_days)).date()
+    return (datetime.utcnow() - timedelta(days=settings.upload_retention_days)).date()
 
 
 async def enqueue_backfill_task(session: AsyncSession, channel: Channel, settings: AppSettings) -> BackfillTask:
     task = BackfillTask(
         channel_id=channel.id,
         status="queued",
-        target_min_count=settings.backfill_min_count,
         target_after=_target_after(settings),
     )
     session.add(task)
@@ -89,32 +90,23 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
                 break
 
             cursor = task.resume_cursor
-            # Request no more than what's still needed to reach
-            # target_min_count — a fixed maxResults=50 meant a target of, say,
-            # 5 still pulled a full 50-item page on the very first call
-            # (YouTube returns whatever the request asks for, not whatever
-            # the target needs). Once the count target is already met and
-            # we're only still chasing target_after (some channels post
-            # often enough that "at least N days back" genuinely needs more
-            # than target_min_count items), full 50-item pages are the more
-            # efficient choice again.
-            remaining = task.target_min_count - task.fetched_count
-            page_max_results = min(50, remaining) if remaining > 0 else 50
 
-            async def _call(
-                api_key: str, _cursor: str | None = cursor, _max_results: int = page_max_results
-            ) -> youtube_client.Page:
+            async def _call(api_key: str, _cursor: str | None = cursor) -> youtube_client.Page:
                 return await youtube_client.list_uploads(
                     http_client,
                     api_key,
                     playlist_id,
                     page_token=_cursor,
-                    max_results=_max_results,
                 )
 
             page = await key_pool.call_with_key_rotation(session, _call)
 
-            new_count = await upsert_uploads(session, channel, page.items, fetched_via="api")
+            # A page can straddle the retention cutoff (some items newer,
+            # some older) — only the in-window ones are ever stored, but the
+            # raw page (including anything past the cutoff) is still what
+            # decides whether to keep paginating, below.
+            in_window_items = [item for item in page.items if item.published_at >= target_after_dt]
+            new_count = await upsert_uploads(session, channel, in_window_items, fetched_via="api")
             task.fetched_count += new_count
 
             if page.items:
@@ -124,14 +116,13 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
 
             task.resume_cursor = page.next_page_token
 
-            target_met = (
-                task.fetched_count >= task.target_min_count
-                and task.oldest_fetched_published_at is not None
+            hit_retention_cutoff = (
+                task.oldest_fetched_published_at is not None
                 and task.oldest_fetched_published_at <= target_after_dt
             )
             no_more_pages = page.next_page_token is None
 
-            if target_met or no_more_pages:
+            if hit_retention_cutoff or no_more_pages:
                 task.status = "completed"
                 task.completed_at = datetime.utcnow()
                 channel.backfill_completed_at = task.completed_at

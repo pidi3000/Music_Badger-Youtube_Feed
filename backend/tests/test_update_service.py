@@ -146,9 +146,9 @@ async def test_stops_once_no_more_pages(db_session, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stops_once_oldest_fetched_upload_crosses_the_lookback_cutoff(db_session, monkeypatch):
+async def test_stops_once_oldest_fetched_upload_crosses_the_retention_cutoff(db_session, monkeypatch):
     settings = await get_or_create_settings(db_session)
-    settings.update_lookback_days = 30
+    settings.upload_retention_days = 30
     await db_session.commit()
 
     channel = await make_channel(db_session)
@@ -159,9 +159,9 @@ async def test_stops_once_oldest_fetched_upload_crosses_the_lookback_cutoff(db_s
     await db_session.commit()
 
     now = datetime.utcnow()
-    # Every page keeps yielding "new" uploads and has a next page, so only
-    # the lookback cutoff (not "no new uploads" or "no more pages") should
-    # stop this loop.
+    # Every page keeps yielding "new" (in-window) uploads and has a next
+    # page, so only the retention cutoff (not "no new uploads" or "no more
+    # pages") should stop this loop.
     pages = iter(
         [
             make_page([("v1", now)], next_token="p2"),
@@ -178,8 +178,46 @@ async def test_stops_once_oldest_fetched_upload_crosses_the_lookback_cutoff(db_s
 
     await db_session.refresh(task)
     assert task.status == "completed"
-    assert task.fetched_count == 2
+    # v2 (60 days old) is past the 30-day retention cutoff — it stops the
+    # loop but is never stored.
+    assert task.fetched_count == 1
     assert task.resume_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_never_stores_an_upload_older_than_the_retention_cutoff(db_session, monkeypatch):
+    """A page can straddle the cutoff (some items newer, some older) —
+    only the in-window ones may ever be persisted."""
+    settings = await get_or_create_settings(db_session)
+    settings.upload_retention_days = 5
+    await db_session.commit()
+
+    channel = await make_channel(db_session)
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
+    await db_session.commit()
+
+    task = await update_service.enqueue_update_task(db_session, channel)
+    await db_session.commit()
+
+    now = datetime.utcnow()
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+        return make_page(
+            [("in-window", now - timedelta(days=1)), ("too-old", now - timedelta(days=10))], next_token=None
+        )
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    await update_service.process_task(db_session, http_client=None, task=task)
+
+    await db_session.refresh(task)
+    assert task.status == "completed"
+    assert task.fetched_count == 1
+
+    from app.models import Upload
+
+    stored_ids = {u.youtube_video_id for u in (await db_session.execute(select(Upload))).scalars()}
+    assert stored_ids == {"in-window"}
 
 
 @pytest.mark.asyncio

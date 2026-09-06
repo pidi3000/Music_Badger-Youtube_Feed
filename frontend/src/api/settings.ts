@@ -4,10 +4,9 @@ import { apiCall } from './client';
 export interface Settings {
   sync_interval_minutes: number;
   backfill_worker_interval_seconds: number;
-  update_lookback_days: number;
+  upload_retention_days: number;
+  live_recheck_interval_minutes: number;
   rss_fallback_enabled: boolean;
-  backfill_days: number;
-  backfill_min_count: number;
   strict_shorts_detection: boolean;
   youtube_connected: boolean;
   youtube_channel_title: string | null;
@@ -21,10 +20,9 @@ export async function updateSettings(
   payload: Partial<{
     sync_interval_minutes: number;
     backfill_worker_interval_seconds: number;
-    update_lookback_days: number;
+    upload_retention_days: number;
+    live_recheck_interval_minutes: number;
     rss_fallback_enabled: boolean;
-    backfill_days: number;
-    backfill_min_count: number;
     strict_shorts_detection: boolean;
   }>,
 ): Promise<Settings> {

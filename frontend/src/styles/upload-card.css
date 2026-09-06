@@ -42,14 +42,31 @@
   text-transform: uppercase;
   color: white;
   background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .video-type-badge.video-type-short {
   background: #7c3aed;
 }
 
-.video-type-badge.video-type-live {
+/* A currently-active livestream: red, with the live dot. */
+.video-type-badge.live-active {
   background: #dc2626;
+}
+
+.video-type-badge.live-active .live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: white;
+}
+
+/* "Live"-type but not actually live right now (upcoming or ended) — a
+   muted, distinctly non-red background so it doesn't read as still live. */
+.video-type-badge.live-inactive {
+  background: #6b7280;
 }
 
 .corner-badge {
@@ -66,18 +83,6 @@
   align-items: center;
   gap: 4px;
   line-height: 1.4;
-}
-
-.live-now-badge {
-  text-transform: uppercase;
-  background: rgba(220, 38, 38, 0.9);
-}
-
-.live-now-badge .live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: white;
 }
 
 .upcoming-badge {

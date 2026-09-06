@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import ClassificationQueue, Upload
 from app.services import key_pool, youtube_client
 from app.services.classification_service import next_check_at_for
+from app.services.settings_service import get_or_create_settings
 
 RESCAN_WINDOW_DAYS = 7
 
@@ -52,6 +53,8 @@ async def rescan_recent_uploads(session: AsyncSession, http_client: httpx.AsyncC
     uploads_by_video_id = {u.youtube_video_id: u for u in result.scalars()}
     if not uploads_by_video_id:
         return RescanResult(checked=0, reclassified=0)
+
+    settings = await get_or_create_settings(session)
 
     video_ids = list(uploads_by_video_id.keys())
     reclassified = 0
@@ -79,13 +82,14 @@ async def rescan_recent_uploads(session: AsyncSession, http_client: httpx.AsyncC
             upload.duration_seconds = classification.duration_seconds
             upload.live_status = classification.live_status
             upload.scheduled_start_at = classification.scheduled_start_at
+            upload.live_started_at = classification.live_started_at
 
             # This upload was just reclassified here, so the classification
             # queue (if it still had a pending or live/upcoming-recheck row
             # for it) doesn't need to redo the same work again.
             queue_row = queue_rows_by_upload_id.get(upload.id)
             if queue_row is not None:
-                next_check_at = next_check_at_for(classification.live_status)
+                next_check_at = next_check_at_for(classification.live_status, settings.live_recheck_interval_minutes)
                 if next_check_at is not None:
                     queue_row.next_check_at = next_check_at
                 else:

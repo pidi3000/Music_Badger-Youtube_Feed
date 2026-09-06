@@ -37,14 +37,18 @@ class AppSettings(Base):
 
     access_secret_hash: Mapped[str] = mapped_column(String(255))
 
-    backfill_days: Mapped[int] = mapped_column(Integer, default=365)
-    backfill_min_count: Mapped[int] = mapped_column(Integer, default=50)
+    # The single cutoff for "how much history do we care about" — both
+    # BackfillTask (deep history fetch on a new channel) and UpdateTask
+    # (incremental "what's new" check) stop paging once they've gone back
+    # this many days, and never store an upload published before it. See
+    # app.services.backfill_service._target_after and
+    # app.services.update_service.process_task's lookback_cutoff.
+    upload_retention_days: Mapped[int] = mapped_column(Integer, default=365)
 
-    # How many days back an incremental update keeps paginating a channel's
-    # uploads playlist looking for new videos, before giving up for this run
-    # (mirrors BackfillTask.target_after but is independently configurable —
-    # updates are meant to be quick, backfill is meant to be thorough).
-    update_lookback_days: Mapped[int] = mapped_column(Integer, default=30)
+    # How often a "live" or "upcoming" upload gets its classification
+    # rechecked (has the stream started? ended?) — see
+    # app.services.classification_service.next_check_at_for.
+    live_recheck_interval_minutes: Mapped[int] = mapped_column(Integer, default=5)
 
     # When every API key is exhausted, fall back to RSS for updates (fewer
     # items, no Shorts/Live classification) instead of stalling. Channels
@@ -177,6 +181,13 @@ class Upload(Base):
     # time the Data API reports for a premiere/scheduled stream.
     scheduled_start_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    # The broadcast's actual start time (Data API liveStreamingDetails.
+    # actualStartTime) — set once live_status is "live" or "ended", null
+    # while "upcoming". Lets the Feed show a currently-live upload's
+    # elapsed duration ticking client-side (now - live_started_at) instead
+    # of a number that's already stale by the time it's rendered.
+    live_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     channel: Mapped["Channel"] = relationship(back_populates="uploads")
@@ -240,7 +251,9 @@ class BackfillTask(Base):
     # "queued" | "in_progress" | "paused_quota" | "completed" | "failed"
     status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
 
-    target_min_count: Mapped[int] = mapped_column(Integer)
+    # The retention cutoff (AppSettings.upload_retention_days at enqueue
+    # time) — the task pages backward through history until it reaches an
+    # upload published before this date, or runs out of pages.
     target_after: Mapped[date] = mapped_column(Date)
 
     fetched_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -264,8 +277,8 @@ class UpdateTask(Base):
     BackfillTask's lifecycle (queued/in_progress/paused_quota/completed/
     failed with a resume_cursor for pagination continuation across quota
     pauses) but paginates only until a page yields no new uploads or the
-    oldest fetched upload crosses AppSettings.update_lookback_days, rather
-    than backfill's much deeper target. See app.services.update_service."""
+    oldest fetched upload crosses AppSettings.upload_retention_days — the
+    same cutoff BackfillTask uses. See app.services.update_service."""
 
     __tablename__ = "update_tasks"
 

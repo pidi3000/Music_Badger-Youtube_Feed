@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from app.encryption import encrypt
-from app.models import ApiKey, AppSettings, BackfillTask, Channel
+from app.models import ApiKey, AppSettings, BackfillTask, Channel, Upload
 from app.services import backfill_service, key_pool, youtube_client
 
 
@@ -16,8 +16,8 @@ def make_page(pairs: list[tuple[str, datetime]], next_token: str | None = None) 
     return youtube_client.Page(items=items, next_page_token=next_token)
 
 
-def fake_settings(min_count: int = 3, days: int = 365) -> AppSettings:
-    return AppSettings(access_secret_hash="x", backfill_min_count=min_count, backfill_days=days)
+def fake_settings(days: int = 365) -> AppSettings:
+    return AppSettings(access_secret_hash="x", upload_retention_days=days)
 
 
 async def make_channel(db_session, youtube_channel_id: str = "UCabc123") -> Channel:
@@ -28,23 +28,26 @@ async def make_channel(db_session, youtube_channel_id: str = "UCabc123") -> Chan
 
 
 @pytest.mark.asyncio
-async def test_completes_when_min_count_and_date_target_both_reached(db_session, monkeypatch):
+async def test_completes_once_it_pages_past_the_retention_cutoff(db_session, monkeypatch):
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
-    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=3, days=365))
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(days=365))
     await db_session.commit()
 
     now = datetime.utcnow()
     pages = iter(
         [
             make_page([("v1", now), ("v2", now - timedelta(days=1))], next_token="p2"),
+            # Older than the 365-day retention window — must stop here and
+            # must NOT be stored (see test_never_stores_an_upload_older_than
+            # _the_retention_cutoff for that half of the behavior).
             make_page([("v3", now - timedelta(days=400))], next_token=None),
         ]
     )
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
         return next(pages)
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
@@ -54,34 +57,54 @@ async def test_completes_when_min_count_and_date_target_both_reached(db_session,
     await db_session.refresh(task)
     await db_session.refresh(channel)
     assert task.status == "completed"
-    assert task.fetched_count == 3
+    assert task.fetched_count == 2
     assert channel.backfill_completed_at is not None
 
 
 @pytest.mark.asyncio
-async def test_requests_no_more_than_the_remaining_target_count(db_session, monkeypatch):
-    """A target_min_count of 5 must not pull a full 50-item page on the
-    first call — YouTube returns however many the request asks for, so a
-    fixed maxResults=50 meant even a tiny target over-fetched relative to
-    what the user configured."""
+async def test_requests_full_size_pages_regardless_of_retention_window(db_session, monkeypatch):
+    """Backfill is purely date-limited now — there's no count target to
+    shrink page requests against, so every page asks for the full 50."""
 
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
-    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=5, days=5))
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(days=5))
     await db_session.commit()
 
     now = datetime.utcnow()
     requested_max_results: list[int] = []
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
         requested_max_results.append(max_results)
-        # All 5 requested items are already older than the 5-day cutoff, so
-        # both the count and date targets are satisfied by this one page.
+        return make_page([(f"v{i}", now - timedelta(days=10 + i)) for i in range(3)], next_token=None)
+
+    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
+
+    await backfill_service.process_task(db_session, http_client=None, task=task)
+
+    assert requested_max_results == [50]
+
+
+@pytest.mark.asyncio
+async def test_never_stores_an_upload_older_than_the_retention_cutoff(db_session, monkeypatch):
+    """A page can straddle the cutoff (some items newer, some older) — only
+    the in-window ones may ever be persisted, even though the raw page
+    (including the older ones) is still what decides when to stop paging."""
+
+    channel = await make_channel(db_session)
+    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
+    await db_session.commit()
+
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(days=5))
+    await db_session.commit()
+
+    now = datetime.utcnow()
+
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
         return make_page(
-            [(f"v{i}", now - timedelta(days=10 + i)) for i in range(max_results)],
-            next_token="more-available",
+            [("in-window", now - timedelta(days=1)), ("too-old", now - timedelta(days=10))], next_token=None
         )
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
@@ -89,65 +112,25 @@ async def test_requests_no_more_than_the_remaining_target_count(db_session, monk
     await backfill_service.process_task(db_session, http_client=None, task=task)
 
     await db_session.refresh(task)
-    assert requested_max_results == [5]
     assert task.status == "completed"
-    assert task.fetched_count == 5
+    assert task.fetched_count == 1
+
+    stored_ids = {u.youtube_video_id for u in (await db_session.execute(select(Upload))).scalars()}
+    assert stored_ids == {"in-window"}
 
 
 @pytest.mark.asyncio
-async def test_requests_full_pages_again_once_count_target_is_met_but_date_target_is_not(db_session, monkeypatch):
-    """Once target_min_count is already satisfied but target_after isn't
-    (an active channel can post more than target_min_count within the
-    retention window), further pages should go back to full-size requests
-    — shrinking them further wouldn't reduce the total fetched, only add
-    more API calls to reach the same date cutoff."""
-
+async def test_completes_when_channel_has_fewer_uploads_than_the_retention_window_would_allow(db_session, monkeypatch):
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
-    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=2, days=5))
-    await db_session.commit()
-
-    now = datetime.utcnow()
-    requested_max_results: list[int] = []
-    pages = iter(
-        [
-            # First page (sized to the target_min_count=2) is still too
-            # recent to satisfy the 5-day cutoff.
-            make_page([("v1", now), ("v2", now - timedelta(days=1))], next_token="p2"),
-            # Count target already met; this page should be requested at
-            # full size (50), not shrunk further.
-            make_page([("v3", now - timedelta(days=10))], next_token=None),
-        ]
-    )
-
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
-        requested_max_results.append(max_results)
-        return next(pages)
-
-    monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
-
-    await backfill_service.process_task(db_session, http_client=None, task=task)
-
-    await db_session.refresh(task)
-    assert requested_max_results == [2, 50]
-    assert task.status == "completed"
-    assert task.fetched_count == 3
-
-
-@pytest.mark.asyncio
-async def test_completes_when_channel_has_fewer_uploads_than_target(db_session, monkeypatch):
-    channel = await make_channel(db_session)
-    db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
-    await db_session.commit()
-
-    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=50, days=365))
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(days=365))
     await db_session.commit()
 
     now = datetime.utcnow()
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
         return make_page([("only-video", now)], next_token=None)
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
@@ -168,7 +151,7 @@ async def test_channel_with_no_uploads_completes_immediately(db_session, monkeyp
     task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings())
     await db_session.commit()
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
         return make_page([], next_token=None)
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)
@@ -187,13 +170,13 @@ async def test_pauses_on_quota_exhaustion_and_resumes_from_cursor(db_session, mo
     db_session.add(key)
     await db_session.commit()
 
-    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=3, days=365))
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(days=365))
     await db_session.commit()
 
     now = datetime.utcnow()
     seen_tokens: list[str | None] = []
 
-    async def fake_list_uploads_first_page_then_quota(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+    async def fake_list_uploads_first_page_then_quota(client, api_key, playlist_id, page_token=None, max_results=50):
         seen_tokens.append(page_token)
         if page_token is None:
             return make_page([("v1", now)], next_token="p2")
@@ -215,9 +198,11 @@ async def test_pauses_on_quota_exhaustion_and_resumes_from_cursor(db_session, mo
     stored_key.quota_resets_at = None
     await db_session.commit()
 
-    async def fake_list_uploads_second_page(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+    async def fake_list_uploads_second_page(client, api_key, playlist_id, page_token=None, max_results=50):
         seen_tokens.append(page_token)
         assert page_token == "p2"
+        # Older than the 365-day retention window — the task still
+        # completes (it's the boundary page), but this one isn't stored.
         return make_page([("v2", now - timedelta(days=400))], next_token=None)
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads_second_page)
@@ -226,7 +211,7 @@ async def test_pauses_on_quota_exhaustion_and_resumes_from_cursor(db_session, mo
 
     await db_session.refresh(task)
     assert task.status == "completed"
-    assert task.fetched_count == 2
+    assert task.fetched_count == 1
     assert seen_tokens == [None, "p2", "p2"]
 
 
@@ -241,13 +226,13 @@ async def test_stop_request_between_pages_halts_before_the_next_fetch(db_session
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
-    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=10, days=365))
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(days=365))
     await db_session.commit()
 
     now = datetime.utcnow()
     call_count = 0
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -273,21 +258,20 @@ async def test_in_progress_transition_is_committed_before_the_first_page_fetch(
 ):
     """The "in_progress" transition must be committed, not just flushed,
     before the loop's first network call — a flush leaves it uncommitted,
-    holding SQLite's write lock for as long as that call takes (which, with
-    strict Shorts detection on, can be tens of seconds per page). A
-    separate connection must see the committed row while the first page's
-    fetch is still in flight, not just after process_task returns."""
+    holding SQLite's write lock for as long as that call takes. A separate
+    connection must see the committed row while the first page's fetch is
+    still in flight, not just after process_task returns."""
 
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
-    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(min_count=1, days=365))
+    task = await backfill_service.enqueue_backfill_task(db_session, channel, fake_settings(days=365))
     await db_session.commit()
 
     visible_status_during_fetch = None
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
         nonlocal visible_status_during_fetch
         async with db_session_factory() as other_session:
             other_task = await other_session.get(BackfillTask, task.id)
@@ -308,14 +292,14 @@ async def test_worker_tick_processes_queued_and_paused_but_not_completed(db_sess
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     await db_session.commit()
 
-    settings = fake_settings(min_count=1, days=365)
+    settings = fake_settings(days=365)
     await backfill_service.enqueue_backfill_task(db_session, channel_a, settings)
     await backfill_service.enqueue_backfill_task(db_session, channel_b, settings)
     await db_session.commit()
 
     now = datetime.utcnow()
 
-    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50, strict_shorts=False):
+    async def fake_list_uploads(client, api_key, playlist_id, page_token=None, max_results=50):
         return make_page([("v1", now)], next_token=None)
 
     monkeypatch.setattr(youtube_client, "list_uploads", fake_list_uploads)

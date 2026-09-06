@@ -36,25 +36,18 @@ logger = logging.getLogger(__name__)
 # videos.list accepts up to 50 comma-separated ids per call.
 BATCH_SIZE = 50
 
-# How long before a still-live or still-upcoming upload gets rechecked,
-# rather than left showing stale live/upcoming status forever. A live
-# broadcast can end at any moment, so it's rechecked often; a
-# scheduled/upcoming stream rarely starts within minutes of being queued,
-# so checking it that often would just waste requests.
-LIVE_RECHECK_INTERVAL = timedelta(minutes=2)
-UPCOMING_RECHECK_INTERVAL = timedelta(minutes=10)
 
-
-def next_check_at_for(live_status: str | None, now: datetime | None = None) -> datetime | None:
-    """When a just-classified upload's queue row should be revisited next.
-    None means "done, stop tracking it" — the caller should delete the
-    row."""
+def next_check_at_for(
+    live_status: str | None, recheck_interval_minutes: int, now: datetime | None = None
+) -> datetime | None:
+    """When a just-classified upload's queue row should be revisited next —
+    both "live" (still broadcasting) and "upcoming" (not started yet) use
+    the same AppSettings.live_recheck_interval_minutes. None means "done,
+    stop tracking it" — the caller should delete the row."""
 
     now = now or datetime.utcnow()
-    if live_status == "live":
-        return now + LIVE_RECHECK_INTERVAL
-    if live_status == "upcoming":
-        return now + UPCOMING_RECHECK_INTERVAL
+    if live_status in ("live", "upcoming"):
+        return now + timedelta(minutes=recheck_interval_minutes)
     return None
 
 
@@ -126,9 +119,10 @@ async def run_worker_tick(session: AsyncSession, http_client: httpx.AsyncClient,
         upload.duration_seconds = classification.duration_seconds
         upload.live_status = classification.live_status
         upload.scheduled_start_at = classification.scheduled_start_at
+        upload.live_started_at = classification.live_started_at
         processed += 1
 
-        next_check_at = next_check_at_for(classification.live_status, now)
+        next_check_at = next_check_at_for(classification.live_status, settings.live_recheck_interval_minutes, now)
         if next_check_at is not None:
             row.next_check_at = next_check_at
         else:

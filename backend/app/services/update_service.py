@@ -3,9 +3,10 @@ backfill_service.py's BackfillTask queue, but for "what's new since last
 time" rather than deep history. See app.models.UpdateTask.
 
 Paginates the uploads playlist (newest-first) via the API, stopping as soon
-as a page yields no new uploads, there are no more pages, or the oldest
-upload fetched so far crosses AppSettings.update_lookback_days — whichever
-comes first. If every API key is exhausted mid-task, falls back to RSS (a
+as a page yields no new (in-window) uploads, there are no more pages, or the
+oldest upload fetched so far crosses AppSettings.upload_retention_days —
+whichever comes first; nothing published before that cutoff is ever stored.
+If every API key is exhausted mid-task, falls back to RSS (a
 single best-effort fetch of the ~15 most recent items) when
 AppSettings.rss_fallback_enabled, or pauses (`paused_quota`, resumable from
 its cursor) otherwise. A fresh task is enqueued for each channel on every
@@ -64,10 +65,15 @@ async def get_next_runnable_task(session: AsyncSession) -> UpdateTask | None:
 
 
 async def _fall_back_to_rss(
-    session: AsyncSession, http_client: httpx.AsyncClient, channel: Channel, task: UpdateTask
+    session: AsyncSession,
+    http_client: httpx.AsyncClient,
+    channel: Channel,
+    task: UpdateTask,
+    lookback_cutoff: datetime,
 ) -> None:
     entries = await rss.fetch_uploads_feed(http_client, channel.youtube_channel_id)
-    new_count = await upsert_uploads(session, channel, entries, fetched_via="rss")
+    in_window_entries = [entry for entry in entries if entry.published_at >= lookback_cutoff]
+    new_count = await upsert_uploads(session, channel, in_window_entries, fetched_via="rss")
     task.fetched_count += new_count
     task.used_rss_fallback = True
     task.status = "completed"
@@ -85,7 +91,7 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
 
     settings = await get_or_create_settings(session)
     playlist_id = youtube_client.uploads_playlist_id_for_channel(channel.youtube_channel_id)
-    lookback_cutoff = datetime.utcnow() - timedelta(days=settings.update_lookback_days)
+    lookback_cutoff = datetime.utcnow() - timedelta(days=settings.upload_retention_days)
 
     task.status = "in_progress"
     task.started_at = task.started_at or datetime.utcnow()
@@ -125,13 +131,18 @@ async def process_task(session: AsyncSession, http_client: httpx.AsyncClient, ta
                 page = await key_pool.call_with_key_rotation(session, _call)
             except key_pool.QuotaExhaustedError:
                 if settings.rss_fallback_enabled:
-                    await _fall_back_to_rss(session, http_client, channel, task)
+                    await _fall_back_to_rss(session, http_client, channel, task, lookback_cutoff)
                 else:
                     task.status = "paused_quota"
                     logger.info("update task %s paused: no active API key available", task.id)
                 break
 
-            new_count = await upsert_uploads(session, channel, page.items, fetched_via="api")
+            # A page can straddle the retention cutoff (some items newer,
+            # some older) — only the in-window ones are ever stored, but the
+            # raw page (including anything past the cutoff) is still what
+            # decides whether to keep paginating, below.
+            in_window_items = [item for item in page.items if item.published_at >= lookback_cutoff]
+            new_count = await upsert_uploads(session, channel, in_window_items, fetched_via="api")
             task.fetched_count += new_count
 
             if page.items:

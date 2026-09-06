@@ -10,7 +10,6 @@ export interface BackfillTask {
   };
   status: 'queued' | 'in_progress' | 'paused_quota' | 'completed' | 'failed';
   fetched_count: number;
-  target_min_count: number;
   target_after: string;
   oldest_fetched_published_at: string | null;
   last_error: string | null;

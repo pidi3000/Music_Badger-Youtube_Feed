@@ -14,11 +14,10 @@ export default function SettingsPage() {
 
   // Settings
   const { data: settings, isLoading: settingsLoading } = useSettings();
-  const [backfillDays, setBackfillDays] = useState(0);
-  const [backfillMinCount, setBackfillMinCount] = useState(0);
+  const [uploadRetentionDays, setUploadRetentionDays] = useState(0);
+  const [liveRecheckIntervalMinutes, setLiveRecheckIntervalMinutes] = useState(0);
   const [syncIntervalMinutes, setSyncIntervalMinutes] = useState(0);
   const [backfillWorkerIntervalSeconds, setBackfillWorkerIntervalSeconds] = useState(0);
-  const [updateLookbackDays, setUpdateLookbackDays] = useState(0);
   const [rssFallbackEnabled, setRssFallbackEnabled] = useState(true);
   const [strictShortsDetection, setStrictShortsDetection] = useState(false);
   const updateSettingsMutation = useUpdateSettings();
@@ -43,11 +42,10 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (settings) {
-      setBackfillDays(settings.backfill_days);
-      setBackfillMinCount(settings.backfill_min_count);
+      setUploadRetentionDays(settings.upload_retention_days);
+      setLiveRecheckIntervalMinutes(settings.live_recheck_interval_minutes);
       setSyncIntervalMinutes(settings.sync_interval_minutes);
       setBackfillWorkerIntervalSeconds(settings.backfill_worker_interval_seconds);
-      setUpdateLookbackDays(settings.update_lookback_days);
       setRssFallbackEnabled(settings.rss_fallback_enabled);
       setStrictShortsDetection(settings.strict_shorts_detection);
     }
@@ -65,11 +63,10 @@ export default function SettingsPage() {
     e.preventDefault();
     try {
       await updateSettingsMutation.mutateAsync({
-        backfill_days: backfillDays,
-        backfill_min_count: backfillMinCount,
+        upload_retention_days: uploadRetentionDays,
+        live_recheck_interval_minutes: liveRecheckIntervalMinutes,
         sync_interval_minutes: syncIntervalMinutes,
         backfill_worker_interval_seconds: backfillWorkerIntervalSeconds,
-        update_lookback_days: updateLookbackDays,
         rss_fallback_enabled: rssFallbackEnabled,
         strict_shorts_detection: strictShortsDetection,
       });
@@ -155,20 +152,18 @@ export default function SettingsPage() {
         ) : (
           <form onSubmit={handleSaveSettings}>
             <div>
-              <label>Backfill Days</label>
+              <label>Upload Retention (days)</label>
               <input
                 type="number"
-                value={backfillDays}
-                onChange={(e) => setBackfillDays(Number(e.target.value))}
+                min={1}
+                value={uploadRetentionDays}
+                onChange={(e) => setUploadRetentionDays(Number(e.target.value))}
               />
-            </div>
-            <div>
-              <label>Backfill Min Count</label>
-              <input
-                type="number"
-                value={backfillMinCount}
-                onChange={(e) => setBackfillMinCount(Number(e.target.value))}
-              />
+              <p className="setting-hint">
+                How far back a channel's upload history is kept. Both the initial backfill on a new
+                channel and every incremental update stop once they've gone back this many days — no
+                upload published before that cutoff is ever fetched or stored.
+              </p>
             </div>
             <div>
               <label>Sync Interval (minutes)</label>
@@ -189,16 +184,16 @@ export default function SettingsPage() {
               />
             </div>
             <div>
-              <label>Update Lookback (days)</label>
+              <label>Live Recheck Interval (minutes)</label>
               <input
                 type="number"
                 min={1}
-                value={updateLookbackDays}
-                onChange={(e) => setUpdateLookbackDays(Number(e.target.value))}
+                value={liveRecheckIntervalMinutes}
+                onChange={(e) => setLiveRecheckIntervalMinutes(Number(e.target.value))}
               />
               <p className="setting-hint">
-                On an incremental update, how far back to keep paging through a channel's uploads
-                looking for new ones.
+                How often a "live" or "upcoming" upload gets its status rechecked — has the stream
+                started, or ended yet?
               </p>
             </div>
             <div className="strict-shorts-toggle">

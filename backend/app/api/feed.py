@@ -106,6 +106,7 @@ async def get_feed(
             duration_seconds=u.duration_seconds,
             live_status=u.live_status,
             scheduled_start_at=u.scheduled_start_at,
+            live_started_at=u.live_started_at,
         )
         for u in uploads
     ]

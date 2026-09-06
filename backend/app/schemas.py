@@ -34,10 +34,9 @@ class AuthStatus(BaseModel):
 class SettingsOut(BaseModel):
     sync_interval_minutes: int
     backfill_worker_interval_seconds: int
-    update_lookback_days: int
+    upload_retention_days: int
+    live_recheck_interval_minutes: int
     rss_fallback_enabled: bool
-    backfill_days: int
-    backfill_min_count: int
     strict_shorts_detection: bool
     youtube_connected: bool
     youtube_channel_title: str | None = None
@@ -46,10 +45,9 @@ class SettingsOut(BaseModel):
 class SettingsUpdate(BaseModel):
     sync_interval_minutes: int | None = Field(default=None, ge=1)
     backfill_worker_interval_seconds: int | None = Field(default=None, ge=10)
-    update_lookback_days: int | None = Field(default=None, ge=1)
+    upload_retention_days: int | None = Field(default=None, ge=1)
+    live_recheck_interval_minutes: int | None = Field(default=None, ge=1)
     rss_fallback_enabled: bool | None = None
-    backfill_days: int | None = Field(default=None, ge=1)
-    backfill_min_count: int | None = Field(default=None, ge=1)
     strict_shorts_detection: bool | None = None
 
 
@@ -139,6 +137,7 @@ class UploadOut(BaseModel):
     duration_seconds: int | None
     live_status: LiveStatus | None
     scheduled_start_at: datetime | None
+    live_started_at: datetime | None
 
 
 class FeedPage(BaseModel):
@@ -175,7 +174,6 @@ class BackfillTaskOut(BaseModel):
     channel: ChannelRef
     status: Literal["queued", "in_progress", "paused_quota", "completed", "failed", "stopping", "stopped"]
     fetched_count: int
-    target_min_count: int
     target_after: date
     oldest_fetched_published_at: datetime | None
     last_error: str | None
@@ -231,9 +229,15 @@ class JobOut(BaseModel):
     error: str | None
     started_at: datetime
     finished_at: datetime | None
-    # Only set for kind="backfill", for the progress bar.
+    # Set for kind="backfill" and "import_subscriptions", for the progress
+    # bar. backfill's progress is date-based now (see progress_percent
+    # below) so it leaves fetched_count/target_min_count unset; only
+    # import_subscriptions (a genuine subscription count) still uses them.
     fetched_count: int | None = None
     target_min_count: int | None = None
+    # 0-100. Set for kind="backfill" — how much of the retention window
+    # (AppSettings.upload_retention_days) has been covered so far.
+    progress_percent: int | None = None
     # Only set for kind="backfill" — the id to POST to
     # /api/backfill-tasks/{id}/retry.
     backfill_task_id: int | None = None

@@ -92,9 +92,13 @@ async def test_terminal_classification_deletes_the_queue_row(db_session, monkeyp
 
 @pytest.mark.asyncio
 async def test_live_classification_keeps_the_row_and_schedules_a_recheck(db_session, monkeypatch):
+    from app.services.settings_service import get_or_create_settings
+
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     upload = await make_queued_upload(db_session, channel.id, "vid1", datetime.utcnow())
+    settings = await get_or_create_settings(db_session)
+    settings.live_recheck_interval_minutes = 7
     await db_session.commit()
 
     async def fake_classify_video_types(client, api_key, video_ids, strict_shorts=False):
@@ -113,14 +117,21 @@ async def test_live_classification_keeps_the_row_and_schedules_a_recheck(db_sess
     result = await db_session.execute(select(ClassificationQueue).where(ClassificationQueue.upload_id == upload.id))
     row = result.scalar_one()
     assert row.next_check_at is not None
-    assert row.next_check_at >= before + classification_service.LIVE_RECHECK_INTERVAL - timedelta(seconds=5)
+    assert row.next_check_at >= before + timedelta(minutes=7) - timedelta(seconds=5)
 
 
 @pytest.mark.asyncio
-async def test_upcoming_classification_uses_the_longer_recheck_interval(db_session, monkeypatch):
+async def test_upcoming_classification_also_schedules_a_recheck(db_session, monkeypatch):
+    """"Live" and "upcoming" share the single configured recheck interval
+    (AppSettings.live_recheck_interval_minutes) — there's no separate,
+    longer interval for upcoming streams anymore."""
+    from app.services.settings_service import get_or_create_settings
+
     channel = await make_channel(db_session)
     db_session.add(ApiKey(label="k1", key_value_encrypted=encrypt("x")))
     upload = await make_queued_upload(db_session, channel.id, "vid1", datetime.utcnow())
+    settings = await get_or_create_settings(db_session)
+    settings.live_recheck_interval_minutes = 7
     await db_session.commit()
 
     async def fake_classify_video_types(client, api_key, video_ids, strict_shorts=False):
@@ -133,7 +144,7 @@ async def test_upcoming_classification_uses_the_longer_recheck_interval(db_sessi
 
     result = await db_session.execute(select(ClassificationQueue).where(ClassificationQueue.upload_id == upload.id))
     row = result.scalar_one()
-    assert row.next_check_at >= before + classification_service.UPCOMING_RECHECK_INTERVAL - timedelta(seconds=5)
+    assert row.next_check_at >= before + timedelta(minutes=7) - timedelta(seconds=5)
 
 
 @pytest.mark.asyncio
@@ -238,14 +249,11 @@ async def test_passes_the_persisted_strict_shorts_setting(db_session, monkeypatc
 
 
 def test_next_check_at_for_terminal_states_is_none():
-    assert classification_service.next_check_at_for(None) is None
-    assert classification_service.next_check_at_for("ended") is None
+    assert classification_service.next_check_at_for(None, 5) is None
+    assert classification_service.next_check_at_for("ended", 5) is None
 
 
-def test_next_check_at_for_live_and_upcoming():
+def test_next_check_at_for_live_and_upcoming_share_the_same_interval():
     now = datetime(2026, 1, 1, 12, 0, 0)
-    assert classification_service.next_check_at_for("live", now) == now + classification_service.LIVE_RECHECK_INTERVAL
-    assert (
-        classification_service.next_check_at_for("upcoming", now)
-        == now + classification_service.UPCOMING_RECHECK_INTERVAL
-    )
+    assert classification_service.next_check_at_for("live", 7, now) == now + timedelta(minutes=7)
+    assert classification_service.next_check_at_for("upcoming", 7, now) == now + timedelta(minutes=7)

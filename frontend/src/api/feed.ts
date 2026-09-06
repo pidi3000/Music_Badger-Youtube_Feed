@@ -23,6 +23,7 @@ export interface Upload {
   duration_seconds: number | null;
   live_status: LiveStatus | null;
   scheduled_start_at: string | null;
+  live_started_at: string | null;
 }
 
 export interface FeedResponse {

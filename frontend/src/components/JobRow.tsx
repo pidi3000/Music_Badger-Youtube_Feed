@@ -54,10 +54,15 @@ const STOPPABLE_STATUSES = new Set(['queued', 'in_progress', 'running', 'paused_
 export default function JobRow({ job, onRetryBackfill, onStop, isStopping }: JobRowProps) {
   const canRetry = job.kind === 'backfill' && job.status === 'failed' && job.backfill_task_id !== null;
   const canStop = STOPPABLE_STATUSES.has(job.status);
+  // backfill's progress is date-based (progress_percent, from the backend —
+  // how much of the retention window has been covered); import_subscriptions
+  // still uses a plain count ratio (fetched_count / target_min_count).
   const progress =
-    job.target_min_count != null
-      ? Math.min(((job.fetched_count ?? 0) / job.target_min_count) * 100, 100)
-      : null;
+    job.progress_percent != null
+      ? job.progress_percent
+      : job.target_min_count != null
+        ? Math.min(((job.fetched_count ?? 0) / job.target_min_count) * 100, 100)
+        : null;
 
   return (
     <div className="job-row">
@@ -95,7 +100,9 @@ export default function JobRow({ job, onRetryBackfill, onStop, isStopping }: Job
             <div className="progress-fill" style={{ width: `${progress}%` }} />
           </div>
           <p className="progress-text">
-            {job.fetched_count} / {job.target_min_count} {PROGRESS_UNIT[job.kind]}
+            {job.target_min_count != null
+              ? `${job.fetched_count} / ${job.target_min_count} ${PROGRESS_UNIT[job.kind]}`
+              : job.detail}
           </p>
         </div>
       )}

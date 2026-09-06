@@ -239,6 +239,11 @@ class VideoClassification:
     live_status: str | None = None
     # Only set when live_status == "upcoming".
     scheduled_start_at: datetime | None = None
+    # The broadcast's actual start time — set once live_status is "live" or
+    # "ended", null while "upcoming". Lets a caller show a still-live
+    # upload's elapsed duration ticking client-side instead of a number
+    # that's already stale by the time it's rendered.
+    live_started_at: datetime | None = None
 
 
 # How many strict-mode redirect checks run at once per classify_video_types
@@ -345,8 +350,15 @@ async def classify_video_types(
             scheduled_start_at = (
                 _parse_iso(live_details["scheduledStartTime"]) if live_details.get("scheduledStartTime") else None
             )
+            live_started_at = (
+                _parse_iso(live_details["actualStartTime"]) if live_details.get("actualStartTime") else None
+            )
             classifications[video_id] = VideoClassification(
-                "live", duration_seconds=seconds, live_status=live_status, scheduled_start_at=scheduled_start_at
+                "live",
+                duration_seconds=seconds,
+                live_status=live_status,
+                scheduled_start_at=scheduled_start_at,
+                live_started_at=live_started_at,
             )
             continue
         duration = item.get("contentDetails", {}).get("duration")

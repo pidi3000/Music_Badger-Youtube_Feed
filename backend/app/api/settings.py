@@ -14,10 +14,9 @@ def _to_out(settings) -> SettingsOut:
     return SettingsOut(
         sync_interval_minutes=settings.sync_interval_minutes,
         backfill_worker_interval_seconds=settings.backfill_worker_interval_seconds,
-        update_lookback_days=settings.update_lookback_days,
+        upload_retention_days=settings.upload_retention_days,
+        live_recheck_interval_minutes=settings.live_recheck_interval_minutes,
         rss_fallback_enabled=settings.rss_fallback_enabled,
-        backfill_days=settings.backfill_days,
-        backfill_min_count=settings.backfill_min_count,
         strict_shorts_detection=settings.strict_shorts_detection,
         youtube_connected=settings.youtube_refresh_token_encrypted is not None,
         youtube_channel_title=settings.youtube_channel_title,
@@ -35,14 +34,12 @@ async def get_settings(session: DbSession):
 async def update_settings(body: SettingsUpdate, session: DbSession, scheduler: SchedulerDep):
     settings = await get_or_create_settings(session)
 
-    if body.update_lookback_days is not None:
-        settings.update_lookback_days = body.update_lookback_days
+    if body.upload_retention_days is not None:
+        settings.upload_retention_days = body.upload_retention_days
+    if body.live_recheck_interval_minutes is not None:
+        settings.live_recheck_interval_minutes = body.live_recheck_interval_minutes
     if body.rss_fallback_enabled is not None:
         settings.rss_fallback_enabled = body.rss_fallback_enabled
-    if body.backfill_days is not None:
-        settings.backfill_days = body.backfill_days
-    if body.backfill_min_count is not None:
-        settings.backfill_min_count = body.backfill_min_count
     if body.strict_shorts_detection is not None:
         settings.strict_shorts_detection = body.strict_shorts_detection
 

@@ -2,6 +2,7 @@ import { Upload } from '../api/feed';
 import { youtubeChannelUrl } from '../utils/youtube';
 import { formatDateTime } from '../utils/dates';
 import { formatDuration } from '../utils/duration';
+import { useElapsedSeconds } from '../hooks/useElapsedSeconds';
 import ChannelAvatar from './ChannelAvatar';
 import RelativeTime from './RelativeTime';
 import '../styles/upload-card.css';
@@ -30,14 +31,21 @@ export default function UploadCard({ upload }: UploadCardProps) {
   };
 
   const typeLabel = VIDEO_TYPE_LABELS[upload.video_type];
-  const isUpcoming = upload.video_type === 'live' && upload.live_status === 'upcoming';
-  const isActiveLive = upload.video_type === 'live' && upload.live_status === 'live';
-  // A "live" upload only has a real, final duration once its broadcast has
-  // ended — while it's upcoming/live there's nothing to show yet.
+  const isLive = upload.video_type === 'live';
+  const isUpcoming = isLive && upload.live_status === 'upcoming';
+  const isActiveLive = isLive && upload.live_status === 'live';
+  const isEndedLive = isLive && upload.live_status === 'ended';
+
+  // Ticks up client-side from the broadcast's actual start time, so it
+  // reads as "current" rather than a number stale from the last
+  // classification check (only every few minutes) — see
+  // AppSettings.live_recheck_interval_minutes. Only computed while active.
+  const activeLiveElapsedSeconds = useElapsedSeconds(isActiveLive ? upload.live_started_at : null);
+
+  // Plain videos/Shorts always have a duration once classified; a "live"
+  // upload only gets one once its broadcast has ended.
   const hasDuration =
-    upload.duration_seconds != null &&
-    upload.duration_seconds > 0 &&
-    (upload.video_type !== 'live' || upload.live_status === 'ended');
+    upload.duration_seconds != null && upload.duration_seconds > 0 && (!isLive || isEndedLive);
 
   return (
     <div className="upload-card" onClick={handleClick}>
@@ -47,12 +55,18 @@ export default function UploadCard({ upload }: UploadCardProps) {
         ) : (
           <div className="placeholder">No image</div>
         )}
-        {typeLabel && <span className={`video-type-badge video-type-${upload.video_type}`}>{typeLabel}</span>}
-        {isActiveLive && (
-          <span className="corner-badge live-now-badge">
-            <span className="live-dot" />
-            Live
+        {typeLabel && (
+          <span
+            className={`video-type-badge video-type-${upload.video_type}${
+              isLive ? (isActiveLive ? ' live-active' : ' live-inactive') : ''
+            }`}
+          >
+            {isActiveLive && <span className="live-dot" />}
+            {typeLabel}
           </span>
+        )}
+        {isActiveLive && activeLiveElapsedSeconds != null && (
+          <span className="corner-badge duration-badge">{formatDuration(activeLiveElapsedSeconds)}</span>
         )}
         {isUpcoming && <span className="corner-badge upcoming-badge">Upcoming</span>}
         {hasDuration && <span className="corner-badge duration-badge">{formatDuration(upload.duration_seconds!)}</span>}
