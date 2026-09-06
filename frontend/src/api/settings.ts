@@ -78,10 +78,29 @@ export function useUpdateSettings() {
   });
 }
 
+// How often to refresh the Feed while a rescan is still in flight. The
+// backend commits each batch of up to 50 uploads as it goes (see
+// reclassify_service.rescan_recent_uploads) rather than waiting for the
+// whole rescan to finish, but a single REST call has no way to push that
+// progress to the browser as it happens — polling the feed query on this
+// interval is what actually surfaces each already-committed batch instead
+// of everything appearing to change at once when the request finally
+// resolves.
+const RESCAN_FEED_REFRESH_INTERVAL_MS = 3000;
+
 export function useRescanShorts() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: rescanShorts,
+    mutationFn: async () => {
+      const interval = setInterval(() => {
+        queryClient.invalidateQueries({ queryKey: ['feed'] });
+      }, RESCAN_FEED_REFRESH_INTERVAL_MS);
+      try {
+        return await rescanShorts();
+      } finally {
+        clearInterval(interval);
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['feed'] });
     },

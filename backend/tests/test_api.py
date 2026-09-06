@@ -599,6 +599,77 @@ async def test_feed_total_uploads_and_video_type_filter(authed_client, db_sessio
 
 
 @pytest.mark.asyncio
+async def test_feed_pins_active_livestreams_above_everything_else(authed_client, db_session):
+    channel = Channel(youtube_channel_id="UClivepin1", title="Live Pin Chan", source="manual")
+    db_session.add(channel)
+    await db_session.flush()
+
+    now = datetime.utcnow()
+    db_session.add_all(
+        [
+            # Newest of all, but not live — must still land below the live one.
+            Upload(
+                channel_id=channel.id,
+                youtube_video_id="vid-newest-video",
+                title="Newest regular video",
+                published_at=now,
+                thumbnail_url=None,
+                fetched_via="api",
+                video_type="video",
+            ),
+            # Oldest by published_at, but currently live — must be pinned first.
+            Upload(
+                channel_id=channel.id,
+                youtube_video_id="vid-active-live",
+                title="Old upload, live right now",
+                published_at=now - timedelta(days=5),
+                thumbnail_url=None,
+                fetched_via="api",
+                video_type="live",
+                live_status="live",
+            ),
+            # "live" type but already ended — an ordinary date-ordered item.
+            Upload(
+                channel_id=channel.id,
+                youtube_video_id="vid-ended-live",
+                title="Ended livestream",
+                published_at=now - timedelta(hours=1),
+                thumbnail_url=None,
+                fetched_via="api",
+                video_type="live",
+                live_status="ended",
+                duration_seconds=600,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await authed_client.get("/api/feed")
+    body = response.json()
+    assert [item["youtube_video_id"] for item in body["items"]] == [
+        "vid-active-live",
+        "vid-newest-video",
+        "vid-ended-live",
+    ]
+
+    # Pinning must not break keyset pagination across pages.
+    seen_ids: list[str] = []
+    cursor = None
+    for _ in range(10):
+        params = {"limit": 1}
+        if cursor:
+            params["cursor"] = cursor
+        page_response = await authed_client.get("/api/feed", params=params)
+        page = page_response.json()
+        seen_ids.extend(item["youtube_video_id"] for item in page["items"])
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+
+    assert seen_ids == ["vid-active-live", "vid-newest-video", "vid-ended-live"]
+
+
+@pytest.mark.asyncio
 async def test_feed_total_uploads_reflects_the_tag_filter(authed_client, db_session):
     from app.models import Tag
 
