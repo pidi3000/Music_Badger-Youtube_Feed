@@ -68,6 +68,12 @@ export function useUpdateSettings() {
     mutationFn: updateSettings,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
+      // Changing sync_interval_minutes (or the backfill worker interval)
+      // reschedules the live APScheduler job immediately — but without
+      // this, the "Last sync / Next sync" display on this same page kept
+      // showing whatever was fetched before the change, i.e. a next-run
+      // time computed under the old interval.
+      queryClient.invalidateQueries({ queryKey: ['sync'] });
     },
   });
 }

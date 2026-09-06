@@ -435,13 +435,21 @@ async def test_rescan_shorts_endpoint_returns_503_with_no_active_key(authed_clie
 
 @pytest.mark.asyncio
 async def test_settings_interval_update_live_reschedules_the_scheduler_jobs(app, authed_client):
-    from datetime import timedelta
+    from datetime import datetime, timedelta
 
     from app.scheduler import BACKFILL_JOB_ID, SYNC_JOB_ID
 
     scheduler = app.state.scheduler
     assert scheduler.get_job(SYNC_JOB_ID).trigger.interval == timedelta(minutes=30)
     assert scheduler.get_job(BACKFILL_JOB_ID).trigger.interval == timedelta(seconds=60)
+
+    # Sets up the exact scenario reported as a bug: a long-interval job
+    # whose next_run_time is currently far in the future (as if it had
+    # last fired under a much longer-since-changed interval), to prove
+    # rescheduling recomputes it from now rather than leaving it stale.
+    stale_next_run = datetime.now(scheduler.get_job(SYNC_JOB_ID).next_run_time.tzinfo) + timedelta(hours=3)
+    scheduler.modify_job(SYNC_JOB_ID, next_run_time=stale_next_run)
+    assert scheduler.get_job(SYNC_JOB_ID).next_run_time == stale_next_run
 
     response = await authed_client.patch(
         "/api/settings",
@@ -456,6 +464,15 @@ async def test_settings_interval_update_live_reschedules_the_scheduler_jobs(app,
     # — not just the DB row — since that's the whole point of this feature.
     assert scheduler.get_job(SYNC_JOB_ID).trigger.interval == timedelta(minutes=15)
     assert scheduler.get_job(BACKFILL_JOB_ID).trigger.interval == timedelta(seconds=45)
+
+    # And next_run_time must be recomputed from now, not left at the stale
+    # value from before the reschedule (what the user's screenshot showed:
+    # "Next sync" still 3 hours out right after lowering the interval to
+    # 15 minutes) — see api/sync.py's sync_status, which reads this
+    # directly off the live job.
+    new_next_run = scheduler.get_job(SYNC_JOB_ID).next_run_time
+    assert new_next_run < stale_next_run
+    assert new_next_run <= datetime.now(new_next_run.tzinfo) + timedelta(minutes=15, seconds=5)
 
     # Persisted, too — a subsequent GET reflects the change.
     refetched = await authed_client.get("/api/settings")
