@@ -505,6 +505,25 @@ async def testclassify_video_types_strict_on_overrides_duration_heuristic():
 
 
 @pytest.mark.asyncio
+async def test_is_actual_short_logs_the_video_duration_next_to_the_request(caplog):
+    """The duration is only for the log line, right next to the request URL
+    and its status — makes it easy to eyeball, from the server console,
+    which checks are landing on genuinely short-enough videos."""
+    response = {
+        "items": [{"id": "vid1", "snippet": {"liveBroadcastContent": "none"}, "contentDetails": {"duration": "PT45S"}}]
+    }
+    client, _ = _mock_client_with_shorts_redirect(response, {"vid1": 200})
+    async with client:
+        with caplog.at_level("INFO", logger="app.services.youtube_client"):
+            await youtube_client.classify_video_types(client, "fake-key", ["vid1"], strict_shorts=True)
+
+    matching = [r.message for r in caplog.records if r.name == "app.services.youtube_client"]
+    assert len(matching) == 1
+    assert "200" in matching[0]
+    assert "duration: 45s" in matching[0]
+
+
+@pytest.mark.asyncio
 async def testclassify_video_types_strict_on_confirms_actual_short():
     response = {
         "items": [

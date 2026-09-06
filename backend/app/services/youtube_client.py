@@ -168,24 +168,36 @@ _SHORTS_CHECK_HEADERS = {
 }
 
 
-async def _is_actual_short(client: httpx.AsyncClient, video_id: str) -> bool | None:
+async def _is_actual_short(
+    client: httpx.AsyncClient, video_id: str, duration_seconds: int | None = None
+) -> bool | None:
     """Unofficial (not part of the Data API, costs no quota) but well-known
     check: YouTube serves `/shorts/{id}` directly (200) for an actual Short
     and 3xx-redirects it to the normal `/watch` page otherwise — the only
     way to see the aspect-ratio signal the Data API doesn't expose for
     videos you don't own. Since it's undocumented and not guaranteed, an
     error or unexpected response returns None so the caller falls back to
-    the duration heuristic instead of guessing."""
+    the duration heuristic instead of guessing.
 
+    `duration_seconds` (the video's own duration, from the videos.list
+    response that made this a candidate) is only used for the log line
+    below — it's not needed for the check itself, but seeing it next to
+    each request's status makes it far easier to eyeball, from the
+    console, which checks are landing on genuinely short-enough videos."""
+
+    url = f"https://www.youtube.com/shorts/{video_id}"
+    duration_note = f", duration: {duration_seconds}s" if duration_seconds is not None else ""
     try:
         response = await client.get(
-            f"https://www.youtube.com/shorts/{video_id}",
+            url,
             follow_redirects=False,
             timeout=10,
             headers=_SHORTS_CHECK_HEADERS,
         )
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        logger.info("strict Shorts check GET %s -> error: %s%s", url, exc, duration_note)
         return None
+    logger.info("strict Shorts check GET %s -> %s%s", url, response.status_code, duration_note)
     if response.status_code == 200:
         return True
     if response.status_code in (301, 302, 303, 307, 308):
@@ -298,6 +310,7 @@ async def classify_video_types(
 
     classifications: dict[str, VideoClassification] = {}
     candidates: dict[str, VideoClassification] = {}  # video_id -> duration-based fallback
+    candidate_seconds: dict[str, int] = {}  # video_id -> duration, just for the log line below
     for item in data.get("items", []):
         video_id = item.get("id")
         if not video_id:
@@ -312,6 +325,7 @@ async def classify_video_types(
 
         if strict_shorts and 0 < seconds <= _SHORTS_CANDIDATE_MAX_SECONDS and not shorts_check_breaker.is_open():
             candidates[video_id] = duration_based
+            candidate_seconds[video_id] = seconds
         else:
             classifications[video_id] = duration_based
 
@@ -320,7 +334,7 @@ async def classify_video_types(
 
         async def _check(video_id: str) -> tuple[str, bool | None]:
             async with semaphore:
-                return video_id, await _is_actual_short(client, video_id)
+                return video_id, await _is_actual_short(client, video_id, candidate_seconds[video_id])
 
         results = await asyncio.gather(*(_check(video_id) for video_id in candidates))
         for video_id, is_short in results:
