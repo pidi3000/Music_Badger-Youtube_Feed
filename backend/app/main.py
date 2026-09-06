@@ -16,6 +16,13 @@ from app.services.settings_service import get_or_create_settings
 
 logging.basicConfig(level=logging.INFO)
 
+# httpx logs a line for every single outgoing HTTP request/response at INFO
+# — with strict Shorts detection running dozens of requests per page, that
+# drowns out the app's own INFO logs (e.g. the duration line right next to
+# each check, see youtube_client._is_actual_short). Left at WARNING so
+# actual httpx-level problems still surface.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
