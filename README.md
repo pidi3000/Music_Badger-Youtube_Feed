@@ -45,10 +45,32 @@ cp .env.example .env
 docker compose up --build
 ```
 
-The app is served at `http://localhost:8000`. `docker-compose.yml` runs
+The app is served at `http://localhost:8000`. `compose.yaml` runs
 PostgreSQL alongside it by default; to use SQLite instead, drop the `db`
-service and the `DATABASE_URL` override in `docker-compose.yml` (the
-image's built-in default is a SQLite file under the `app-data` volume).
+service and the `DATABASE_URL` override in `compose.yaml` (the image's
+built-in default is a SQLite file under the `app-data` volume).
+
+### Using the published image
+
+Every push to `main`, and every version tag, is built and published to the
+GitHub Container Registry by [`.github/workflows/publish-ghcr.yml`](.github/workflows/publish-ghcr.yml)
+as `ghcr.io/pidi3000/music_badger-youtube_feed`. To use it instead of
+building locally, replace the `app` service's `build:` block in
+`compose.yaml` with:
+
+```yaml
+    image: ghcr.io/pidi3000/music_badger-youtube_feed:latest
+```
+
+or run it directly:
+
+```bash
+docker run -p 8000:8000 --env-file .env -v app-data:/app/data \
+  ghcr.io/pidi3000/music_badger-youtube_feed:latest
+```
+
+Available tags: `latest` (most recent push to `main`), `vX.Y.Z` / `vX.Y` /
+`vX` for tagged releases, and `main-<short-sha>` for a specific commit.
 
 A single-container `docker build -t music-badger .` (from the repo root)
 also works standalone — see the root `Dockerfile`. It runs
@@ -184,5 +206,5 @@ frontend/    React + TypeScript SPA (Vite, TanStack Query, react-router)
     components/
 
 Dockerfile             multi-stage: builds the SPA, bakes it into the API image
-docker-compose.yml      app + PostgreSQL for local/prod use
+compose.yaml           app + PostgreSQL for local/prod use
 ```
